@@ -1,0 +1,6 @@
+# Directorios
+__pycache__/
+videos/
+
+# Ficheros
+yolo11m.pt
