@@ -5,17 +5,28 @@ import torch
 from datetime import datetime
 import os
 from configuracion import CLASS_NAMES, ROI_ENABLED, ROI_COORDS, ROI_COLOR, ROI_THICKNESS
+import yt_dlp
 from utiles import calculate_center, is_in_roi
 
 def get_youtube_stream(video_url):
     """Obtiene una URL de streaming de vídeo de YouTube"""
     ydl_opts = {
-        'format': 'best[ext=mp4][height<=720]',
-        'quiet': True
+        'format': 'best[ext=mp4]/best',
+        'quiet': True,
     }
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
-        return info['url']
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            if 'url' in info:
+                return info['url']
+            elif 'formats' in info and info['formats']:
+                for f in info['formats']:
+                    if f.get('url'):
+                        return f['url']
+            raise Exception("No se encontró URL de stream")
+    except Exception as e:
+        raise Exception(f"Error al obtener stream: {str(e)}")
 
 def initialize_model(device):
     """Inicializa y devuelve el modelo YOLO"""
