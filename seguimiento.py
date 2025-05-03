@@ -39,9 +39,10 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
             overlap = calculate_overlap_area(detection1['box'], detection2['box'])
             iou = calculate_iou(detection1['box'], detection2['box'])
             
-            # Si se produce un solapamiento sustancial o una casilla contiene a la otra
-            if (overlap > 0.7 or iou > OVERLAP_THRESHOLD or 
-                is_box_contained(detection1['box'], detection2['box'])):
+            # MODIFICADO: Aumentar umbral para considerar detecciones separadas
+            # Esto evita agrupar vehículos diferentes que estén cercanos
+            if (overlap > 0.9 or iou > 0.85 or 
+                is_box_contained(detection1['box'], detection2['box'], threshold=0.95)):
                 group.append(detection2)
                 used_detection_indices.add(j)
                 
@@ -223,20 +224,21 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
             distance = calculate_distance(det_center, veh_center)
             overlap = calculate_overlap_area(vehicle_data['box'], detection['box'])
             
-            # Si está muy cerca de un vehículo existente y ese vehículo ha sido visto recientemente
+            # MODIFICACIÓN: Reducir la distancia mínima para considerar vehículos diferentes
+            # Esto permitirá contar vehículos cercanos entre sí
             frames_since_seen = processed_frames - vehicle_data['last_seen']
-            if distance < 60 and frames_since_seen < COOLDOWN_FRAMES:  # Aumento de 50 a 60 píxeles
+            if distance < 35 and frames_since_seen < COOLDOWN_FRAMES:  # Reducido de 60 a 35 píxeles
                 too_close_to_existing = True
                 break
                 
-            # Si el vehículo se ha "ido" pero la detección aparece en el mismo lugar
-            if frames_since_seen >= DISAPPEAR_THRESHOLD and distance < 40:
+            # MODIFICACIÓN: Reducir la distancia para verificar vehículos que se han ido
+            if frames_since_seen >= DISAPPEAR_THRESHOLD and distance < 25:  # Reducido de 40 a 25 píxeles
                 too_close_to_existing = True
                 break
                 
-            # Compruebe si se trata de una detección "parcial" de un vehículo existente.
-            # (por ejemplo, sólo detectar parte de un camión como un coche)
-            if overlap > 0.6 and frames_since_seen < 5:
+            # MODIFICACIÓN: Aumentar el umbral de solapamiento para detectar duplicados
+            # Esto permitirá que detecciones parciales cercanas se consideren vehículos diferentes
+            if overlap > 0.8 and frames_since_seen < 5:  # Aumentado de 0.6 a 0.8
                 potential_duplicate = True
                 duplicate_vehicle_id = vehicle_id
                 break
@@ -274,6 +276,60 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
                 vehicle_data['last_seen'] = processed_frames
                 vehicle_data['predicted'] = False
                 matched_vehicles.add(duplicate_vehicle_id)
+    
+    # Modificar la sección donde se verifica si las detecciones están demasiado cerca
+
+    # En la función process_detections, ubicar la sección que determina new_vehicles
+    for detection in remaining_unmatched:
+        det_center = calculate_center(detection['box'])
+        
+        # Verificar si esta detección está en una región donde recientemente contamos un vehículo
+        too_close_to_existing = False
+        potential_duplicate = False
+        duplicate_vehicle_id = None
+        
+        for vehicle_id, vehicle_data in tracked_vehicles.items():
+            # Verificar todos los vehículos, incluyendo los ya emparejados
+            veh_center = calculate_center(vehicle_data['box'])
+            distance = calculate_distance(det_center, veh_center)
+            overlap = calculate_overlap_area(vehicle_data['box'], detection['box'])
+            
+            # MODIFICACIÓN: Reducir aún más el umbral de distancia para permitir
+            # vehículos muy cercanos entre sí
+            frames_since_seen = processed_frames - vehicle_data['last_seen']
+            if distance < 20 and frames_since_seen < COOLDOWN_FRAMES:  # Reducido de 35 a 20 píxeles
+                too_close_to_existing = True
+                break
+                
+            # Reducir la distancia para verificar vehículos que ya pasaron
+            if frames_since_seen >= DISAPPEAR_THRESHOLD and distance < 15:  # Reducido de 25 a 15 píxeles
+                too_close_to_existing = True
+                break
+                
+            # Reducir umbral de superposición para distinguir mejor vehículos cercanos
+            if overlap > 0.7 and frames_since_seen < 5:  # Reducido de 0.8 a 0.7
+                potential_duplicate = True
+                duplicate_vehicle_id = vehicle_id
+                break
+                
+        # Si la detección no está demasiado cerca de un vehículo existente
+        if not too_close_to_existing and not potential_duplicate:
+            # Crear un nuevo seguimiento de vehículo
+            tracked_vehicles[next_vehicle_id] = {
+                'box': detection['box'],
+                'class_id': detection['class_id'],
+                'class_history': deque([detection['class_id']], maxlen=CLASS_HISTORY_SIZE),
+                'last_seen': processed_frames,
+                'confidence': detection['confidence'],
+                'velocity': (0, 0),
+                'consecutive_matches': 1,
+                'is_counted': False,
+                'predicted': False,
+                'detection_stability': 1
+            }
+            
+            matched_vehicles.add(next_vehicle_id)
+            next_vehicle_id += 1
     
     # Actualizar las predicciones de posición de los vehículos no emparejados
     for vehicle_id, vehicle_data in tracked_vehicles.items():
@@ -317,8 +373,10 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
         is_counted = vehicle_data.get('is_counted', False)
         class_id = vehicle_data.get('class_id', 2)  # Clase predeterminada si no existe
         
-        # Cuenta el vehículo si tiene suficientes detecciones consecutivas y estabilidad
-        if not is_counted and consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= 3:
+        # MODIFICACIÓN: Reducir el umbral de estabilidad para acelerar el conteo
+        # de vehículos en el ROI
+        # MODIFICACIÓN: Reducir requisitos para contar un vehículo en el ROI
+        if not is_counted and consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= 2:  # Cambio de 3 a 2
             vehicle_data['is_counted'] = True
             
             # Usar siempre ID 2 como contador genérico para todos los vehículos

@@ -128,7 +128,24 @@ def is_in_roi(box, roi, frame_width, frame_height):
     center_x = (box[0] + box[2]) / 2
     center_y = (box[1] + box[3]) / 2
     
-    # Comprobar si el centro de la detección está dentro del ROI
+    # También verificar si una parte significativa de la caja está en el ROI (no solo el centro)
+    # Calcular intersección entre la caja y el ROI
+    intersection_x1 = max(box[0], roi_pixels[0])
+    intersection_y1 = max(box[1], roi_pixels[1])
+    intersection_x2 = min(box[2], roi_pixels[2])
+    intersection_y2 = min(box[3], roi_pixels[3])
+    
+    # Si hay intersección válida
+    if intersection_x1 < intersection_x2 and intersection_y1 < intersection_y2:
+        # Calcular área de intersección
+        intersection_area = (intersection_x2 - intersection_x1) * (intersection_y2 - intersection_y1)
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
+        
+        # Si al menos 30% del vehículo está en el ROI, considerarlo dentro
+        if intersection_area / box_area > 0.3:
+            return True
+    
+    # Verificar si el centro está dentro del ROI (criterio original)
     return (roi_pixels[0] <= center_x <= roi_pixels[2] and 
             roi_pixels[1] <= center_y <= roi_pixels[3])
 

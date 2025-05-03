@@ -3,7 +3,7 @@ import torch
 import contextlib
 
 from configuracion import *
-from utiles import FilteredStderr, save_vehicle_counts_to_json, is_in_roi
+from utiles import FilteredStderr, save_vehicle_counts_to_json, is_in_roi, calculate_center
 from seguimiento import process_detections
 from video import (
     get_youtube_stream, 
@@ -164,9 +164,14 @@ def process_video(model, device, video_stream, duration, target_fps):
                             confidence = float(detection.conf)
                             box = detection.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
                             
-                            # Solo procesar detecciones dentro del ROI
-                            if is_in_roi(box, ROI_COORDS, frame_width, frame_height):
+                            # MODIFICADO: Usar ROI más permisivo y añadir debug
+                            in_roi = is_in_roi(box, ROI_COORDS, frame_width, frame_height)
+                            if in_roi:
                                 current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
+                                # Debug print para verificar que se detectan vehículos en ROI
+                                if processed_frames % 10 == 0:  # Limitar la cantidad de mensajes
+                                    center = calculate_center(box)
+                                    print(f"Detectado vehículo en ROI: centro={center}, confianza={confidence:.2f}")
                 
                 # Actualizar vehículos rastreados
                 tracked_vehicles, unique_vehicle_counts = process_detections(

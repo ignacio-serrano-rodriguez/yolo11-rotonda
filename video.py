@@ -97,6 +97,12 @@ def annotate_frame(frame, results, unique_vehicle_counts, frame_width, frame_hei
         roi_x2 = int(ROI_COORDS[2] * frame_width)
         roi_y2 = int(ROI_COORDS[3] * frame_height)
         
+        # ROI más visible con relleno semitransparente
+        overlay = annotated_frame.copy()
+        cv2.rectangle(overlay, (roi_x1, roi_y1), (roi_x2, roi_y2), ROI_COLOR, -1)  # Relleno
+        cv2.addWeighted(overlay, 0.3, annotated_frame, 0.7, 0, annotated_frame)  # Transparencia
+        
+        # Borde del ROI
         cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), ROI_COLOR, ROI_THICKNESS)
         cv2.putText(annotated_frame, "ROI", (roi_x1 + 10, roi_y1 + 25), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, ROI_COLOR, 2)

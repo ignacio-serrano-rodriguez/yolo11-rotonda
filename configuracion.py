@@ -26,12 +26,12 @@ SPANISH_NAMES = {
 VEHICLE_CLASSES = [2, 3, 5, 7]  # coche, moto, autobús, camión
 
 # Parámetros para la detección de vehículos únicos
-IOU_THRESHOLD = 0.18        # Umbral de IOU para considerar que dos detecciones son el mismo vehículo (reducido)
-OVERLAP_THRESHOLD = 0.55    # Umbral para agrupar detecciones superpuestas (mismo vehículo) (reducido)
-DISAPPEAR_THRESHOLD = 35    # Número de frames para considerar que un vehículo ha abandonado la escena (aumentado)
-COOLDOWN_FRAMES = 10        # Frames a esperar antes de contar un nuevo vehículo en una zona similar (reducido)
-MIN_CONSECUTIVE_DETECTIONS = 2  # Número mínimo de detecciones consecutivas para contar un vehículo
-MAX_PREDICTION_FRAMES = 12  # Número máximo de frames para predecir posición de un vehículo cuando no es detectado
+IOU_THRESHOLD = 0.15        # Umbral de IOU más bajo para hacer más fácil el matching
+OVERLAP_THRESHOLD = 0.4    # Umbral para agrupar detecciones superpuestas (más bajo)
+DISAPPEAR_THRESHOLD = 40   # Número de frames para considerar que un vehículo ha abandonado la escena
+COOLDOWN_FRAMES = 8        # Frames a esperar antes de contar un nuevo vehículo (reducido)
+MIN_CONSECUTIVE_DETECTIONS = 1  # Solo necesita ser detectado una vez para ser contado
+MAX_PREDICTION_FRAMES = 15  # Predecir posición por más frames cuando no es detectado
 CLASS_HISTORY_SIZE = 5      # Tamaño del historial de clases para estabilizar la identificación
 
 # =====================================
