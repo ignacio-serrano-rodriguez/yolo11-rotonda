@@ -49,7 +49,7 @@ def process_video(model, device, video_stream, duration, target_fps):
     
     # Crear un VideoWriter para guardar el video de salida
     output_video, frame_width, frame_height, video_filename = create_video_writer(cap, target_fps)
-    print(f"Guardando video de salida como: {video_filename}")
+    print(f"Guardando video de salida: {video_filename}")
     
     # Calcular la cantidad total de cuadros
     frame_count = int(duration * target_fps)
@@ -69,7 +69,6 @@ def process_video(model, device, video_stream, duration, target_fps):
     
     print(f"Resolución del vídeo: {INPUT_RESOLUTION}x{INPUT_RESOLUTION}\nSalto de frame: {FRAME_SKIP}\nConfianza: {CONFIDENCE}")
     print(f"Parámetros de tracking: IOU={IOU_THRESHOLD}, Desaparición={DISAPPEAR_THRESHOLD}, Min_Detecciones={MIN_CONSECUTIVE_DETECTIONS}")
-    print(f"Historial de clases: {CLASS_HISTORY_SIZE} frames")
     
     # Variables para manejar el estado del procesamiento
     current_results = None
@@ -211,7 +210,7 @@ def process_video(model, device, video_stream, duration, target_fps):
     cap.release()
     output_video.release()
     
-    print("Procesamiento completado. Vídeo guardado en:", video_filename)
+    print("Procesamiento completado.")
     return unique_vehicle_counts
 
 def main():
