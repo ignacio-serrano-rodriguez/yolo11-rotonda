@@ -55,7 +55,7 @@ def process_video(model, device, video_stream, duration, target_fps):
     frame_count = int(duration * target_fps)
     
     # Diccionario para contar las detecciones únicas de cada clase de vehículo
-    unique_vehicle_counts = {2: 0}  # Usar ID 2 como contador genérico para todos los vehículos
+    unique_vehicle_counts = {class_id: 0 for class_id in VEHICLE_CLASSES}
     
     # Diccionario para rastrear vehículos únicos
     tracked_vehicles = {}

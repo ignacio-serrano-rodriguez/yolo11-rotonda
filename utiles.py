@@ -64,16 +64,19 @@ def calculate_distance(center1, center2):
 # Función para guardar los conteos de vehículos en un archivo JSON
 def save_vehicle_counts_to_json(counts, output_file='conteo.json'):
     """
-    Guarda los conteos de vehículos en un archivo JSON con nombres en español.
+    Guarda los conteos de vehículos en un archivo JSON.
     Si el archivo ya existe, incrementa los valores en lugar de reemplazarlos.
     
     Args:
-        counts (dict): Diccionario con los conteos de vehículos
+        counts (dict): Diccionario con los conteos de vehículos por clase
         output_file (str): Nombre del archivo de salida
     """
-    # Calcular el total de todos los vehículos
+    # Preparar datos para guardar - solo conteo total
+    current_data = {}
+    
+    # Añadir total de vehículos
     total_vehicles = sum(counts.values())
-    current_data = {"vehiculo": total_vehicles}
+    current_data["vehiculo"] = total_vehicles
     
     # Comprobar si el archivo existe y leer los datos actuales
     if os.path.exists(output_file):
@@ -81,7 +84,7 @@ def save_vehicle_counts_to_json(counts, output_file='conteo.json'):
             with open(output_file, 'r', encoding='utf-8') as f:
                 existing_data = json.load(f)
                 
-            # Incrementar los valores existentes
+            # Actualizar solo el conteo total de vehículos
             if "vehiculo" in existing_data:
                 existing_data["vehiculo"] += total_vehicles
             else:
@@ -100,6 +103,8 @@ def save_vehicle_counts_to_json(counts, output_file='conteo.json'):
     # Guardar el archivo JSON
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(data_to_save, f, indent=4)
+    
+    print(f"Conteo guardado en {output_file}: {data_to_save}")
 
 # Función para verificar si una detección está dentro del ROI
 def is_in_roi(box, roi, frame_width, frame_height):

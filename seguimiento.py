@@ -315,10 +315,17 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
         consecutive_matches = vehicle_data.get('consecutive_matches', 0)
         stability = vehicle_data.get('detection_stability', 0)
         is_counted = vehicle_data.get('is_counted', False)
+        class_id = vehicle_data.get('class_id', 2)  # Clase predeterminada si no existe
         
         # Cuenta el vehículo si tiene suficientes detecciones consecutivas y estabilidad
         if not is_counted and consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= 3:
             vehicle_data['is_counted'] = True
+            
+            # Usar siempre ID 2 como contador genérico para todos los vehículos
+            if 2 not in unique_vehicle_counts:
+                unique_vehicle_counts[2] = 0
+                
+            # Incrementar el contador para todos los vehículos independientemente de su clase
             unique_vehicle_counts[2] += 1
     
     # Retire los vehículos que no se han visto durante un tiempo

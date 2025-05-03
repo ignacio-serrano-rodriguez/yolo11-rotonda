@@ -147,25 +147,25 @@ def annotate_frame(frame, results, unique_vehicle_counts, frame_width, frame_hei
     
     # Mostrar el conteo de vehículos en el frame (esquina superior derecha en naranja)
     color = (0, 128, 255)
-    
+
     # Calcular el tamaño del texto para posicionarlo correctamente en la parte superior derecha
     title_text = "Conteo"
     title_size, _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-    
+
     # Posición del título (alineado a la derecha)
     title_x = frame_width - title_size[0] - 10
     y_pos = 40
-    
+
     cv2.putText(annotated_frame, title_text, (title_x, y_pos), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
     y_pos += 30
-    
-    # Mostrar el total de vehículos en lugar de conteos por clase
+
+    # Mostrar el total de vehículos (único dato a mostrar)
     total_vehicles = sum(unique_vehicle_counts.values())
-    text = f"Vehiculos: {total_vehicles}"
+    text = f"Total: {total_vehicles}"
     text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
     text_x = frame_width - text_size[0] - 10
-    
+
     cv2.putText(annotated_frame, text, (text_x, y_pos), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
