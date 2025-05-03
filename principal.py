@@ -32,9 +32,10 @@ def setup_gpu():
         return device
 
 def process_video(model, device, video_stream, duration, target_fps):
-    """Procesa el video, detecta y cuenta vehículos"""
+    """Procesa el video, detecta y cuenta vehículos con buffer para evitar cortes"""
     import cv2
     import numpy as np
+    from collections import deque
     
     start_time = time.time()
     
@@ -59,6 +60,9 @@ def process_video(model, device, video_stream, duration, target_fps):
     # Diccionario para rastrear vehículos únicos
     tracked_vehicles = {}
     
+    # Crear buffer de frames para manejar interrupciones
+    frame_buffer = deque(maxlen=30)  # Buffer de 30 frames (~1 segundo a 30fps)
+    
     # Leer y procesar los cuadros del video
     processed_frames = 0
     real_frame = 0
@@ -67,71 +71,132 @@ def process_video(model, device, video_stream, duration, target_fps):
     print(f"Parámetros de tracking: IOU={IOU_THRESHOLD}, Desaparición={DISAPPEAR_THRESHOLD}, Min_Detecciones={MIN_CONSECUTIVE_DETECTIONS}")
     print(f"Historial de clases: {CLASS_HISTORY_SIZE} frames")
     
+    # Variables para manejar el estado del procesamiento
+    current_results = None
+    stream_failed = False
+    reconnect_attempts = 0
+    max_reconnect_attempts = 5
+    
+    # Prellenar el buffer con algunos frames
+    print("Prellenando buffer de frames...")
+    while len(frame_buffer) < frame_buffer.maxlen and len(frame_buffer) < 15:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_buffer.append(frame.copy())
+    
     # Crear filtro para mensajes de error específicos
     filtered_stderr = FilteredStderr("Cannot reuse HTTP connection for different host")
     
     # Usar el filtro para suprimir los mensajes de error de conexión HTTP
     with contextlib.redirect_stderr(filtered_stderr):
         while processed_frames < frame_count:
-            ret, frame = cap.read()
-            if not ret:
-                print("Fin del video o error al leer.")
+            # Intentar obtener un nuevo frame solo si no estamos en modo de fallo
+            if not stream_failed:
+                ret, frame = cap.read()
+                if ret:
+                    # Añadir frame al buffer
+                    frame_buffer.append(frame.copy())
+                    reconnect_attempts = 0  # Resetear contador de reconexión
+                else:
+                    stream_failed = True
+                    print("Error al leer frame. Usando buffer...")
+            
+            # Si el stream falló, intentar reconectar
+            if stream_failed:
+                if reconnect_attempts < max_reconnect_attempts:
+                    try:
+                        print(f"Intento de reconexión {reconnect_attempts+1}/{max_reconnect_attempts}...")
+                        cap.release()
+                        time.sleep(1)  # Esperar brevemente antes de reintentar
+                        video_stream = get_youtube_stream(YOUTUBE_URL)
+                        cap = cv2.VideoCapture(video_stream)
+                        if cap.isOpened():
+                            ret, test_frame = cap.read()
+                            if ret:
+                                # Reconexión exitosa
+                                stream_failed = False
+                                print("Reconexión exitosa.")
+                                frame_buffer.append(test_frame.copy())
+                            else:
+                                reconnect_attempts += 1
+                        else:
+                            reconnect_attempts += 1
+                    except Exception as e:
+                        print(f"Error al reconectar: {e}")
+                        reconnect_attempts += 1
+            
+            # Obtener un frame para procesar - del buffer si está disponible o el último procesado
+            if len(frame_buffer) > 0:
+                current_frame = frame_buffer.popleft()
+            elif 'annotated_frame' in locals():
+                # Si el buffer está vacío, duplicar el último frame anotado
+                current_frame = annotated_frame.copy()
+            else:
+                # Si no hay frames en el buffer ni frames procesados, no podemos continuar
+                print("No hay frames disponibles para procesar.")
                 break
             
             real_frame += 1
             
-            # Procesar sólo cada enésimo fotograma
-            if (real_frame - 1) % FRAME_SKIP != 0:
-                continue
-    
-            # Realizar la predicción usando YOLO
-            results = model.predict(
-                frame, 
-                imgsz=INPUT_RESOLUTION,
-                conf=CONFIDENCE, 
-                verbose=False, 
-                classes=VEHICLE_CLASSES,
-                device=device
-            )
+            # Decidir si procesamos este frame para detección
+            process_this_frame = (real_frame - 1) % FRAME_SKIP == 0
             
-            # Lista de detecciones actuales
-            current_detections = []
+            if process_this_frame:
+                # Realizar la predicción usando YOLO
+                results = model.predict(
+                    current_frame, 
+                    imgsz=INPUT_RESOLUTION,
+                    conf=CONFIDENCE, 
+                    verbose=False, 
+                    classes=VEHICLE_CLASSES,
+                    device=device
+                )
+                current_results = results
+                
+                # Lista de detecciones actuales
+                current_detections = []
+                
+                # Extraer las detecciones del frame actual
+                for result in results:
+                    for detection in result.boxes:
+                        class_id = int(detection.cls)
+                        if class_id in VEHICLE_CLASSES:
+                            confidence = float(detection.conf)
+                            box = detection.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
+                            
+                            # Solo procesar detecciones dentro del ROI
+                            if is_in_roi(box, ROI_COORDS, frame_width, frame_height):
+                                current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
+                
+                # Actualizar vehículos rastreados
+                tracked_vehicles, unique_vehicle_counts = process_detections(
+                    current_detections, 
+                    tracked_vehicles, 
+                    processed_frames, 
+                    unique_vehicle_counts,
+                    frame_width,
+                    frame_height
+                )
             
-            # Extraer las detecciones del frame actual
-            for result in results:
-                for detection in result.boxes:
-                    class_id = int(detection.cls)
-                    if class_id in VEHICLE_CLASSES:
-                        confidence = float(detection.conf)
-                        box = detection.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
-                        
-                        # Solo procesar detecciones dentro del ROI
-                        if is_in_roi(box, ROI_COORDS, frame_width, frame_height):
-                            current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
+            # Anotar cada frame (procesado o no)
+            if current_results is not None:
+                # Dibujar los resultados en el cuadro
+                annotated_frame = annotate_frame(
+                    current_frame, 
+                    current_results, 
+                    unique_vehicle_counts, 
+                    frame_width, 
+                    frame_height,
+                    tracked_vehicles
+                )
+            else:
+                # Si aún no tenemos resultados (primeros frames)
+                annotated_frame = current_frame.copy()
             
-            # Actualizar vehículos rastreados
-            tracked_vehicles, unique_vehicle_counts = process_detections(
-                current_detections, 
-                tracked_vehicles, 
-                processed_frames, 
-                unique_vehicle_counts,
-                frame_width,
-                frame_height
-            )
-            
-            # Dibujar los resultados en el cuadro
-            annotated_frame = annotate_frame(
-                frame, 
-                results, 
-                unique_vehicle_counts, 
-                frame_width, 
-                frame_height,
-                tracked_vehicles
-            )
-    
-            # Escribir el cuadro procesado en el video de salida
+            # Escribir cada frame al video de salida
             output_video.write(annotated_frame)
-    
+            
             # Incrementar el contador de cuadros procesados
             processed_frames += 1
             
@@ -146,13 +211,7 @@ def process_video(model, device, video_stream, duration, target_fps):
     cap.release()
     output_video.release()
     
-    end_time = time.time()
-    total_time = end_time - start_time
-    average_fps = processed_frames / total_time
-    
-    print(f"Tiempo de procesamiento total: {total_time:.2f} segundos")
-    print(f"Vehículos contados: {unique_vehicle_counts[2]}")
-    
+    print("Procesamiento completado. Vídeo guardado en:", video_filename)
     return unique_vehicle_counts
 
 def main():

@@ -9,21 +9,51 @@ import yt_dlp
 from utiles import calculate_center, is_in_roi
 
 def get_youtube_stream(video_url):
-    """Obtiene una URL de streaming de vídeo de YouTube"""
+    """Obtiene una URL de streaming de vídeo de YouTube con calidad moderada y sin cortes"""
     ydl_opts = {
-        'format': 'best[ext=mp4]/best',
+        # Primero intentar calidad media (480p-720p), con fallback a menor calidad
+        'format': 'best[height>=480][height<=720]/best[height>=360][height<=480]/best',
         'quiet': True,
+        # Aumentamos el buffer para mejorar la estabilidad
+        'buffersize': 16384,
+        # Ignoramos cualquier error SSL/certificados
+        'no-check-certificate': True
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
+            
+            # Si el extractor devuelve directamente una URL
             if 'url' in info:
                 return info['url']
+            
+            # Si tenemos formatos disponibles
             elif 'formats' in info and info['formats']:
-                for f in info['formats']:
-                    if f.get('url'):
-                        return f['url']
+                # Primero, intenta encontrar un formato adecuado dentro del rango preferido (480p-720p)
+                suitable_formats = [f for f in info['formats'] 
+                                   if f.get('height', 0) >= 480 and f.get('height', 0) <= 720 
+                                   and f.get('url')]
+                
+                # Si no hay formatos en el rango preferido, acepta rangos más bajos (360p-480p)
+                if not suitable_formats:
+                    suitable_formats = [f for f in info['formats'] 
+                                       if f.get('height', 0) >= 360 and f.get('height', 0) <= 480
+                                       and f.get('url')]
+                
+                # Si aún no tenemos formatos, acepta cualquiera disponible
+                if not suitable_formats:
+                    suitable_formats = [f for f in info['formats'] if f.get('url')]
+                
+                if suitable_formats:
+                    # Preferir formatos más estables (mp4 > webm)
+                    for f in suitable_formats:
+                        if f.get('ext') == 'mp4':
+                            return f['url']
+                    
+                    # Si no hay mp4, usar cualquier formato disponible
+                    return suitable_formats[0]['url']
+            
             raise Exception("No se encontró URL de stream")
     except Exception as e:
         raise Exception(f"Error al obtener stream: {str(e)}")
