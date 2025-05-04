@@ -148,5 +148,3 @@ def save_vehicle_counts_to_json(counts, output_file='conteo.json'):
     
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(data_to_save, f, indent=4)
-    
-    print(f"Conteo guardado en {output_file}: {data_to_save}")

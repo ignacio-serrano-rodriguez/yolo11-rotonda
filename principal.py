@@ -37,32 +37,35 @@ def process_video(model, device, video_stream, duration, target_fps):
         print("Error al abrir el stream de YouTube.")
         return None
     
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
+    
     output_video, frame_width, frame_height, video_filename = create_video_writer(cap, target_fps)
     print(f"Guardando video de salida: {video_filename}")
     
     frame_count = int(duration * target_fps)
     unique_vehicle_counts = {class_id: 0 for class_id in VEHICLE_CLASSES}
     tracked_vehicles = {}
-    frame_buffer = deque(maxlen=30)
+    
+    frame_buffer = deque(maxlen=60)
     
     processed_frames = 0
     real_frame = 0
     
     print(f"Resolución del vídeo: {INPUT_RESOLUTION}x{INPUT_RESOLUTION}\nSalto de frame: {FRAME_SKIP}\nConfianza: {CONFIDENCE}")
-    print(f"Parámetros de tracking: IOU={IOU_THRESHOLD}, Desaparición={DISAPPEAR_THRESHOLD}, Min_Detecciones={MIN_CONSECUTIVE_DETECTIONS}")
+    print(f"Parámetros de tracking: IOU={IOU_THRESHOLD}, Desaparición={DISAPPEAR_THRESHOLD}")
     
     current_results = None
     stream_failed = False
     reconnect_attempts = 0
-    max_reconnect_attempts = 5
+    max_reconnect_attempts = 10
     
     print("Prellenando buffer de frames...")
-    while len(frame_buffer) < frame_buffer.maxlen and len(frame_buffer) < 15:
+    while len(frame_buffer) < frame_buffer.maxlen * 0.5:
         ret, frame = cap.read()
         if not ret:
             break
         frame_buffer.append(frame.copy())
-    
+        
     filtered_stderr = FilteredStderr("Cannot reuse HTTP connection for different host")
     
     with contextlib.redirect_stderr(filtered_stderr):
@@ -84,12 +87,19 @@ def process_video(model, device, video_stream, duration, target_fps):
                         time.sleep(1)
                         video_stream = get_youtube_stream(YOUTUBE_URL)
                         cap = cv2.VideoCapture(video_stream)
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
+                        
                         if cap.isOpened():
-                            ret, test_frame = cap.read()
-                            if ret:
+                            success_reads = 0
+                            for _ in range(5):
+                                ret, test_frame = cap.read()
+                                if ret:
+                                    success_reads += 1
+                                    frame_buffer.append(test_frame.copy())
+                            
+                            if success_reads >= 3:
                                 stream_failed = False
                                 print("Reconexión exitosa.")
-                                frame_buffer.append(test_frame.copy())
                             else:
                                 reconnect_attempts += 1
                         else:
@@ -102,12 +112,20 @@ def process_video(model, device, video_stream, duration, target_fps):
                 current_frame = frame_buffer.popleft()
             elif 'annotated_frame' in locals():
                 current_frame = annotated_frame.copy()
+                cv2.putText(current_frame, "BUFFER VACÍO - FRAME DUPLICADO", 
+                            (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
+                            0.8, (0, 0, 255), 2)
             else:
                 print("No hay frames disponibles para procesar.")
                 break
             
             real_frame += 1
-            process_this_frame = (real_frame - 1) % FRAME_SKIP == 0
+            
+            skip_factor = FRAME_SKIP
+            if len(frame_buffer) < frame_buffer.maxlen * 0.3:
+                skip_factor = max(2, FRAME_SKIP * 2)  # Double the skip or at least 2
+            
+            process_this_frame = (real_frame - 1) % skip_factor == 0
             
             if process_this_frame:
                 results = model.predict(
@@ -132,9 +150,8 @@ def process_video(model, device, video_stream, duration, target_fps):
                             in_roi = is_in_roi(box, ROI_COORDS, frame_width, frame_height)
                             if in_roi:
                                 current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
-                                if processed_frames % 10 == 0:
+                                if processed_frames % 30 == 0:
                                     center = calculate_center(box)
-                                    print(f"Detectado vehículo en ROI: centro={center}, confianza={confidence:.2f}")
                 
                 tracked_vehicles, unique_vehicle_counts = process_detections(
                     current_detections, 
@@ -157,6 +174,9 @@ def process_video(model, device, video_stream, duration, target_fps):
             else:
                 annotated_frame = current_frame.copy()
             
+            buffer_fill = len(frame_buffer) / frame_buffer.maxlen
+            buffer_color = (0, 255, 0) if buffer_fill > 0.5 else (0, 165, 255) if buffer_fill > 0.2 else (0, 0, 255)
+            
             output_video.write(annotated_frame)
             processed_frames += 1
             
@@ -169,7 +189,6 @@ def process_video(model, device, video_stream, duration, target_fps):
     cap.release()
     output_video.release()
     
-    print("Procesamiento completado.")
     return unique_vehicle_counts
 
 def main():

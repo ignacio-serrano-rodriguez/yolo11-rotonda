@@ -9,10 +9,12 @@ from utiles import calculate_center, is_in_roi
 
 def get_youtube_stream(video_url):
     ydl_opts = {
-        'format': 'best[height>=480][height<=720]/best[height>=360][height<=480]/best',
+        'format': 'best[height>=360][height<=480]/best[height<=720]/best',
         'quiet': True,
-        'buffersize': 16384,
-        'no-check-certificate': True
+        'buffersize': 32768,
+        'no-check-certificate': True,
+        'socket_timeout': 30,
+        'retries': 10
     }
     
     try:
@@ -24,22 +26,20 @@ def get_youtube_stream(video_url):
             
             elif 'formats' in info and info['formats']:
                 suitable_formats = [f for f in info['formats'] 
-                                   if f.get('height', 0) >= 480 and f.get('height', 0) <= 720 
+                                   if f.get('height', 0) >= 360 and f.get('height', 0) <= 480 
                                    and f.get('url')]
-                
-                if not suitable_formats:
-                    suitable_formats = [f for f in info['formats'] 
-                                       if f.get('height', 0) >= 360 and f.get('height', 0) <= 480
-                                       and f.get('url')]
                 
                 if not suitable_formats:
                     suitable_formats = [f for f in info['formats'] if f.get('url')]
                 
                 if suitable_formats:
-                    for f in suitable_formats:
-                        if f.get('ext') == 'mp4':
-                            return f['url']
+                    mp4_formats = [f for f in suitable_formats if f.get('ext') == 'mp4']
+                    if mp4_formats:
+                        mp4_formats.sort(key=lambda x: x.get('tbr', 0))
+                        if mp4_formats:
+                            return mp4_formats[0]['url']
                     
+                    suitable_formats.sort(key=lambda x: x.get('tbr', 0))
                     return suitable_formats[0]['url']
             
             raise Exception("No se encontró URL de stream")
