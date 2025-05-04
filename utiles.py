@@ -153,34 +153,16 @@ def is_in_roi(box: List[float], frame_width: int, frame_height: int) -> bool:
             roi_pixels[1] <= center_y <= roi_pixels[3])
 
 def save_vehicle_counts_to_json(counts: Dict[int, int]):
-    """Saves the counted vehicle numbers to a JSON file, updating existing counts.
+    """Saves the total vehicle count to a JSON file, updating the existing count.
 
-    Saves counts per vehicle class using Spanish names from config, plus a total.
+    Only saves the total number of vehicles detected across all classes.
     """
     output_file = CONFIG['output']['count_file']
-    spanish_names = CONFIG['model'].get('spanish_names', {})
-    class_names = CONFIG['model'].get('class_names', {})
-    total_key = spanish_names.get("vehicle_total", "total_vehiculos") # Key for the total count
+    # Use the configured key for the total count, default to "total_vehiculos"
+    total_key = CONFIG['model']['spanish_names'].get("vehicle_total", "total_vehiculos")
 
-    # Prepare current counts with Spanish names
-    current_counts_named = {}
-    total_current_session = 0
-    for class_id, count in counts.items():
-        # Get the English name first to find the Spanish name
-        english_name = class_names.get(class_id)
-        if english_name:
-            # Use the Spanish name if found, otherwise fallback to English name or generic
-            key_name = spanish_names.get(english_name, f"clase_{class_id}")
-            current_counts_named[key_name] = count
-            total_current_session += count
-        else:
-            # Fallback if class_id not in class_names
-            key_name = f"clase_{class_id}"
-            current_counts_named[key_name] = count
-            total_current_session += count
-
-    # Add the total for this session under the specific total key
-    current_counts_named[total_key] = total_current_session
+    # Calculate total vehicles detected in this session
+    total_current_session = sum(counts.values())
 
     # Load existing data if file exists
     existing_data = {}
@@ -189,27 +171,31 @@ def save_vehicle_counts_to_json(counts: Dict[int, int]):
             with open(output_file, 'r', encoding='utf-8') as f:
                 existing_data = json.load(f)
             if not isinstance(existing_data, dict):
-                logger.warning(f"Existing data in {output_file} is not a dictionary. Overwriting.")
+                logger.warning(f"Existing data in {output_file} is not a dictionary. Overwriting with total count.")
                 existing_data = {}
             logger.info(f"Loaded existing counts from: {output_file}")
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Error reading or parsing existing count file {output_file}. Starting fresh. Error: {e}")
             existing_data = {} # Reset if file is corrupted
 
-    # Update existing data with new counts
-    data_to_save = existing_data.copy() # Start with existing data
-    for key, value in current_counts_named.items():
-        data_to_save[key] = data_to_save.get(key, 0) + value # Add new counts to existing ones
+    # Get the previous total count, default to 0 if key doesn't exist or data is invalid
+    previous_total = existing_data.get(total_key, 0)
+    if not isinstance(previous_total, int):
+        logger.warning(f"Existing value for '{total_key}' in {output_file} is not an integer. Resetting total.")
+        previous_total = 0
 
-    # Ensure the total count is also updated correctly if it existed before
-    # (The loop above handles adding the current session's total to the existing total)
+    # Calculate the new total count
+    new_total = previous_total + total_current_session
 
-    logger.info(f"Counts to save: {data_to_save}")
+    # Prepare data to save (only the total count)
+    data_to_save = {total_key: new_total}
+
+    logger.info(f"Total vehicles this session: {total_current_session}. New total count to save: {new_total}")
 
     # Save the updated data
     try:
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, indent=4, ensure_ascii=False) # ensure_ascii=False for Spanish names
-        logger.info(f"Vehicle counts updated successfully in {output_file}")
+        logger.info(f"Total vehicle count updated successfully in {output_file}")
     except IOError as e:
         logger.error(f"Error writing to count file {output_file}. Error: {e}")
