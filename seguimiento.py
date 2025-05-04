@@ -235,6 +235,17 @@ def process_detections(
 
     unmatched_detections = []
 
+    # --- Calculate ROI boundaries once ---
+    roi_enabled = CONFIG['roi']['enabled']
+    roi_coords = CONFIG['roi']['coords']
+    roi_x1, roi_y1, roi_x2, roi_y2 = 0, 0, frame_width, frame_height # Default to full frame if ROI disabled
+    if roi_enabled:
+        roi_x1 = int(roi_coords[0] * frame_width)
+        roi_y1 = int(roi_coords[1] * frame_height)
+        roi_x2 = int(roi_coords[2] * frame_width)
+        roi_y2 = int(roi_coords[3] * frame_height)
+    # -------------------------------------
+
     for detection in grouped_detections:
         best_match = None
         best_score = IOU_THRESHOLD # Use IOU_THRESHOLD as minimum score for matching existing tracks
@@ -252,8 +263,33 @@ def process_detections(
         if best_match is not None:
             # Check if this detection is already assigned to another track (can happen with overlapping high scores)
             if best_match not in matched_vehicles:
-                 tracked_vehicles[best_match] = update_tracked_vehicle(tracked_vehicles[best_match], detection, processed_frames)
-                 matched_vehicles.add(best_match)
+                # --- Check for ROI entry from right or bottom --- 
+                vehicle_data = tracked_vehicles[best_match]
+                assign_new_id = False
+                if roi_enabled:
+                    prev_center = calculate_center(vehicle_data['box'])
+                    new_center = calculate_center(detection['box'])
+
+                    prev_in_roi = roi_x1 <= prev_center[0] <= roi_x2 and roi_y1 <= prev_center[1] <= roi_y2
+                    new_in_roi = roi_x1 <= new_center[0] <= roi_x2 and roi_y1 <= new_center[1] <= roi_y2
+
+                    if not prev_in_roi and new_in_roi:
+                        entered_from_right = prev_center[0] >= roi_x2 # Check if previous X was beyond right edge
+                        entered_from_bottom = prev_center[1] >= roi_y2 # Check if previous Y was beyond bottom edge
+
+                        if entered_from_right or entered_from_bottom:
+                            logger.info(f"Vehicle ID {best_match} entered ROI from invalid direction (right/bottom). Assigning new ID.")
+                            assign_new_id = True
+                # ------------------------------------------------
+
+                if assign_new_id:
+                    tracked_vehicles.pop(best_match, None) # Remove the old track
+                    unmatched_detections.append(detection) # Treat as a new detection
+                    # Do not add best_match to matched_vehicles
+                else:
+                    # Normal update
+                    tracked_vehicles[best_match] = update_tracked_vehicle(vehicle_data, detection, processed_frames)
+                    matched_vehicles.add(best_match)
             else:
                  # This detection matched strongly with a vehicle that was already matched by another detection.
                  # Add it to unmatched for potential prediction matching or new track creation if confidence is high enough.
@@ -397,7 +433,9 @@ def process_detections(
              # Additional check: Ensure the vehicle center is within the ROI if enabled
              should_count = True
              if CONFIG['roi']['enabled']:
-                 if not is_in_roi(vehicle_data['box'], frame_width, frame_height):
+                 # Use pre-calculated ROI boundaries
+                 center_x, center_y = calculate_center(vehicle_data['box'])
+                 if not (roi_x1 <= center_x <= roi_x2 and roi_y1 <= center_y <= roi_y2):
                      should_count = False
                      # logger.debug(f"Vehicle {vehicle_id} met stability but is outside ROI, not counting yet.")
 
