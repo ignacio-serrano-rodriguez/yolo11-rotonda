@@ -1,17 +1,21 @@
 import time
 import torch
-import contextlib
+# Removed contextlib import
 import cv2
 import numpy as np
 from collections import deque
+import os
+import logging
+import sys
 
-from configuracion import *
-from utiles import FilteredStderr, save_vehicle_counts_to_json, is_in_roi, calculate_center
+# Import config and utility functions
+# Removed FilteredStderr from import
+# Access CONFIG directly for all parameters
+from utiles import CONFIG, save_vehicle_counts_to_json, is_in_roi, calculate_center
 from seguimiento import process_detections
 from video import get_youtube_stream, create_video_writer, annotate_frame, initialize_model
 
 def setup_gpu():
-    import os
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     
     if torch.cuda.is_available():
@@ -43,7 +47,8 @@ def process_video(model, device, video_stream, duration, target_fps):
     print(f"Guardando video de salida: {video_filename}")
     
     frame_count = int(duration * target_fps)
-    unique_vehicle_counts = {class_id: 0 for class_id in VEHICLE_CLASSES}
+    # Use CONFIG for vehicle classes
+    unique_vehicle_counts = {class_id: 0 for class_id in CONFIG['model']['vehicle_classes']}
     tracked_vehicles = {}
     
     frame_buffer = deque(maxlen=60)
@@ -51,8 +56,9 @@ def process_video(model, device, video_stream, duration, target_fps):
     processed_frames = 0
     real_frame = 0
     
-    print(f"Resolución del vídeo: {INPUT_RESOLUTION}x{INPUT_RESOLUTION}\nSalto de frame: {FRAME_SKIP}\nConfianza: {CONFIDENCE}")
-    print(f"Parámetros de tracking: IOU={IOU_THRESHOLD}, Desaparición={DISAPPEAR_THRESHOLD}")
+    # Use CONFIG for parameters
+    print(f"Resolución del vídeo: {CONFIG['video']['input_resolution']}x{CONFIG['video']['input_resolution']}\nSalto de frame: {CONFIG['video']['frame_skip']}\nConfianza: {CONFIG['video']['confidence']}")
+    print(f"Parámetros de tracking: IOU={CONFIG['tracking']['iou_threshold']}, Desaparición={CONFIG['tracking']['disappear_threshold']}")
     
     current_results = None
     stream_failed = False
@@ -66,125 +72,126 @@ def process_video(model, device, video_stream, duration, target_fps):
             break
         frame_buffer.append(frame.copy())
         
-    filtered_stderr = FilteredStderr("Cannot reuse HTTP connection for different host")
-    
-    with contextlib.redirect_stderr(filtered_stderr):
-        while processed_frames < frame_count:
-            if not stream_failed:
-                ret, frame = cap.read()
-                if ret:
-                    frame_buffer.append(frame.copy())
-                    reconnect_attempts = 0
-                else:
-                    stream_failed = True
-                    print("Error al leer frame. Usando buffer...")
-            
-            if stream_failed:
-                if reconnect_attempts < max_reconnect_attempts:
-                    try:
-                        print(f"Intento de reconexión {reconnect_attempts+1}/{max_reconnect_attempts}...")
-                        cap.release()
-                        time.sleep(1)
-                        video_stream = get_youtube_stream(YOUTUBE_URL)
-                        cap = cv2.VideoCapture(video_stream)
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
+    while processed_frames < frame_count:
+        if not stream_failed:
+            ret, frame = cap.read()
+            if ret:
+                frame_buffer.append(frame.copy())
+                reconnect_attempts = 0
+            else:
+                stream_failed = True
+                print("Error al leer frame. Usando buffer...")
+        
+        if stream_failed:
+            if reconnect_attempts < max_reconnect_attempts:
+                try:
+                    print(f"Intento de reconexión {reconnect_attempts+1}/{max_reconnect_attempts}...")
+                    cap.release()
+                    time.sleep(1)
+                    video_stream = get_youtube_stream(CONFIG['video']['youtube_url'])
+                    cap = cv2.VideoCapture(video_stream)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
+                    
+                    if cap.isOpened():
+                        success_reads = 0
+                        for _ in range(5):
+                            ret, test_frame = cap.read()
+                            if ret:
+                                success_reads += 1
+                                frame_buffer.append(test_frame.copy())
                         
-                        if cap.isOpened():
-                            success_reads = 0
-                            for _ in range(5):
-                                ret, test_frame = cap.read()
-                                if ret:
-                                    success_reads += 1
-                                    frame_buffer.append(test_frame.copy())
-                            
-                            if success_reads >= 3:
-                                stream_failed = False
-                                print("Reconexión exitosa.")
-                            else:
-                                reconnect_attempts += 1
+                        if success_reads >= 3:
+                            stream_failed = False
+                            print("Reconexión exitosa.")
                         else:
                             reconnect_attempts += 1
-                    except Exception as e:
-                        print(f"Error al reconectar: {e}")
+                    else:
                         reconnect_attempts += 1
+                except Exception as e:
+                    print(f"Error al reconectar: {e}")
+                    reconnect_attempts += 1
+        
+        if len(frame_buffer) > 0:
+            current_frame = frame_buffer.popleft()
+        elif 'annotated_frame' in locals():
+            current_frame = annotated_frame.copy()
+            cv2.putText(current_frame, "BUFFER VACÍO - FRAME DUPLICADO", 
+                        (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.8, (0, 0, 255), 2)
+        else:
+            print("No hay frames disponibles para procesar.")
+            break
+        
+        real_frame += 1
+        
+        # Use CONFIG for frame skip
+        skip_factor = CONFIG['video']['frame_skip']
+        if len(frame_buffer) < frame_buffer.maxlen * 0.3:
+            skip_factor = max(2, CONFIG['video']['frame_skip'] * 2)  # Double the skip or at least 2
+        
+        process_this_frame = (real_frame - 1) % skip_factor == 0
+        
+        if process_this_frame:
+            results = model.predict(
+                current_frame, 
+                # Use CONFIG for input resolution, confidence, vehicle classes
+                imgsz=CONFIG['video']['input_resolution'],
+                conf=CONFIG['video']['confidence'], 
+                verbose=False, 
+                classes=CONFIG['model']['vehicle_classes'],
+                device=device
+            )
+            current_results = results
             
-            if len(frame_buffer) > 0:
-                current_frame = frame_buffer.popleft()
-            elif 'annotated_frame' in locals():
-                current_frame = annotated_frame.copy()
-                cv2.putText(current_frame, "BUFFER VACÍO - FRAME DUPLICADO", 
-                            (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.8, (0, 0, 255), 2)
-            else:
-                print("No hay frames disponibles para procesar.")
-                break
+            current_detections = []
             
-            real_frame += 1
+            for result in results:
+                for detection in result.boxes:
+                    class_id = int(detection.cls)
+                    # Use CONFIG for vehicle classes
+                    if class_id in CONFIG['model']['vehicle_classes']:
+                        confidence = float(detection.conf)
+                        box = detection.xyxy[0].cpu().numpy()
+                        
+                        # Use CONFIG for ROI coords
+                        in_roi = is_in_roi(box, frame_width, frame_height) # is_in_roi now uses CONFIG internally
+                        if in_roi:
+                            current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
+                            if processed_frames % 30 == 0:
+                                center = calculate_center(box)
             
-            skip_factor = FRAME_SKIP
-            if len(frame_buffer) < frame_buffer.maxlen * 0.3:
-                skip_factor = max(2, FRAME_SKIP * 2)  # Double the skip or at least 2
-            
-            process_this_frame = (real_frame - 1) % skip_factor == 0
-            
-            if process_this_frame:
-                results = model.predict(
-                    current_frame, 
-                    imgsz=INPUT_RESOLUTION,
-                    conf=CONFIDENCE, 
-                    verbose=False, 
-                    classes=VEHICLE_CLASSES,
-                    device=device
-                )
-                current_results = results
-                
-                current_detections = []
-                
-                for result in results:
-                    for detection in result.boxes:
-                        class_id = int(detection.cls)
-                        if class_id in VEHICLE_CLASSES:
-                            confidence = float(detection.conf)
-                            box = detection.xyxy[0].cpu().numpy()
-                            
-                            in_roi = is_in_roi(box, ROI_COORDS, frame_width, frame_height)
-                            if in_roi:
-                                current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
-                                if processed_frames % 30 == 0:
-                                    center = calculate_center(box)
-                
-                tracked_vehicles, unique_vehicle_counts = process_detections(
-                    current_detections, 
-                    tracked_vehicles, 
-                    processed_frames, 
-                    unique_vehicle_counts,
-                    frame_width,
-                    frame_height
-                )
-            
-            if current_results is not None:
-                annotated_frame = annotate_frame(
-                    current_frame, 
-                    current_results, 
-                    unique_vehicle_counts, 
-                    frame_width, 
-                    frame_height,
-                    tracked_vehicles
-                )
-            else:
-                annotated_frame = current_frame.copy()
-            
-            buffer_fill = len(frame_buffer) / frame_buffer.maxlen
-            buffer_color = (0, 255, 0) if buffer_fill > 0.5 else (0, 165, 255) if buffer_fill > 0.2 else (0, 0, 255)
-            
-            output_video.write(annotated_frame)
-            processed_frames += 1
-            
-            if processed_frames % 30 == 0:
-                elapsed = time.time() - start_time
-                fps_current = processed_frames / elapsed
-                remaining = (frame_count - processed_frames) / fps_current
-                print(f"- ({processed_frames/frame_count*100:.1f}%) Procesado - {processed_frames}/{frame_count} Frames procesados - {remaining:.1f}s restantes aprox")
+            tracked_vehicles, unique_vehicle_counts = process_detections(
+                current_detections, 
+                tracked_vehicles, 
+                processed_frames, 
+                unique_vehicle_counts,
+                frame_width,
+                frame_height
+            )
+        
+        if current_results is not None:
+            annotated_frame = annotate_frame(
+                current_frame, 
+                current_results, 
+                unique_vehicle_counts, 
+                frame_width, 
+                frame_height,
+                tracked_vehicles
+            )
+        else:
+            annotated_frame = current_frame.copy()
+        
+        buffer_fill = len(frame_buffer) / frame_buffer.maxlen
+        buffer_color = (0, 255, 0) if buffer_fill > 0.5 else (0, 165, 255) if buffer_fill > 0.2 else (0, 0, 255)
+        
+        output_video.write(annotated_frame)
+        processed_frames += 1
+        
+        if processed_frames % 30 == 0:
+            elapsed = time.time() - start_time
+            fps_current = processed_frames / elapsed
+            remaining = (frame_count - processed_frames) / fps_current
+            print(f"- ({processed_frames/frame_count*100:.1f}%) Procesado - {processed_frames}/{frame_count} Frames procesados - {remaining:.1f}s restantes aprox")
     
     cap.release()
     output_video.release()
@@ -199,18 +206,20 @@ def main():
     
     print("Conexión al stream de YouTube...")
     try:
-        video_stream = get_youtube_stream(YOUTUBE_URL)
+        # Use CONFIG for YouTube URL
+        video_stream = get_youtube_stream(CONFIG['video']['youtube_url'])
     except Exception as e:
         print(f"Error al conectar con YouTube: {e}")
         return
     
     print("Procesando vídeo...")
+    # Use CONFIG for duration and target FPS
     unique_vehicle_counts = process_video(
         model, 
         device, 
         video_stream, 
-        DURATION, 
-        TARGET_FPS
+        CONFIG['video']['duration'], 
+        CONFIG['video']['target_fps']
     )
     
     if unique_vehicle_counts:

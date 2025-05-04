@@ -1,0 +1,45 @@
+# config.yaml
+video:
+  input_resolution: 480
+  frame_skip: 2
+  confidence: 0.55
+  youtube_url: "https://www.youtube.com/watch?v=0dKNLFFcHFU"
+  duration: 30 # seconds
+  target_fps: 30
+
+model:
+  class_names:
+    2: "vehicle"
+    3: "vehicle"
+    5: "vehicle"
+    7: "vehicle"
+  spanish_names:
+    "vehicle": "vehiculo"
+  vehicle_classes: [2, 3, 5, 7]
+  model_path: "yolo11m.pt"
+
+tracking:
+  iou_threshold: 0.15
+  overlap_threshold: 0.4
+  disappear_threshold: 40
+  cooldown_frames: 8
+  min_consecutive_detections: 1
+  max_prediction_frames: 15
+  class_history_size: 5
+
+roi:
+  enabled: True
+  coords: [0.8, 0.60, 1.0, 0.85] # [x1, y1, x2, y2]
+  color: [0, 255, 0] # Use list for YAML
+  thickness: 2
+
+output:
+  video_dir: "videos"
+  count_file: "conteo.json"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+gpu:
+  cuda_visible_devices: "0"

@@ -1,16 +1,27 @@
 import numpy as np
 from collections import deque
-from configuracion import (
-    IOU_THRESHOLD, OVERLAP_THRESHOLD, DISAPPEAR_THRESHOLD, 
-    MIN_CONSECUTIVE_DETECTIONS, MAX_PREDICTION_FRAMES, CLASS_HISTORY_SIZE,
-    COOLDOWN_FRAMES
-)
+import logging
+
+# Import config and utility functions
 from utiles import (
-    calculate_iou, calculate_center, calculate_size, calculate_distance, 
+    CONFIG, calculate_iou, calculate_center, calculate_size, calculate_distance,
     calculate_overlap_area, is_box_contained, get_most_common_class
 )
 
+logger = logging.getLogger(__name__)
+
+# Load tracking parameters from config
+TRACKING_CONFIG = CONFIG['tracking']
+IOU_THRESHOLD = TRACKING_CONFIG['iou_threshold']
+OVERLAP_THRESHOLD = TRACKING_CONFIG['overlap_threshold']
+DISAPPEAR_THRESHOLD = TRACKING_CONFIG['disappear_threshold']
+MIN_CONSECUTIVE_DETECTIONS = TRACKING_CONFIG['min_consecutive_detections']
+MAX_PREDICTION_FRAMES = TRACKING_CONFIG['max_prediction_frames']
+CLASS_HISTORY_SIZE = TRACKING_CONFIG['class_history_size']
+COOLDOWN_FRAMES = TRACKING_CONFIG['cooldown_frames']
+
 def group_overlapping_detections(current_detections):
+    """Groups highly overlapping detections, keeping the one with highest confidence."""
     sorted_detections = sorted(enumerate(current_detections), key=lambda x: x[1]['confidence'], reverse=True)
     grouped_detections = []
     used_detection_indices = set()
@@ -40,6 +51,7 @@ def group_overlapping_detections(current_detections):
     return grouped_detections
 
 def calculate_match_score(detection, vehicle_data, frame_width, frame_height, processed_frames):
+    """Calculates a score indicating how well a detection matches a tracked vehicle."""
     det_center = calculate_center(detection['box'])
     det_size = calculate_size(detection['box'])
     veh_center = calculate_center(vehicle_data['box'])
@@ -82,6 +94,7 @@ def calculate_match_score(detection, vehicle_data, frame_width, frame_height, pr
     return score
 
 def update_tracked_vehicle(vehicle_data, detection, processed_frames):
+    """Updates the state of a tracked vehicle with a new matching detection."""
     old_center = calculate_center(vehicle_data['box'])
     new_center = calculate_center(detection['box'])
     
@@ -111,6 +124,7 @@ def update_tracked_vehicle(vehicle_data, detection, processed_frames):
     return vehicle_data
 
 def match_with_predicted_positions(remaining_detections, tracked_vehicles, matched_vehicles, processed_frames, frame_width, frame_height):
+    """Attempts to match remaining detections with predicted positions of lost tracks."""
     still_unmatched = []
     
     for detection in remaining_detections:
@@ -155,6 +169,7 @@ def match_with_predicted_positions(remaining_detections, tracked_vehicles, match
     return still_unmatched, matched_vehicles
 
 def process_detections(current_detections, tracked_vehicles, processed_frames, unique_vehicle_counts, frame_width, frame_height):
+    """Processes current frame detections to update tracked vehicles and count new ones."""
     matched_vehicles = set()
     next_vehicle_id = max(tracked_vehicles.keys()) + 1 if tracked_vehicles else 0
     
@@ -205,6 +220,7 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
                 break
                 
         if not too_close_to_existing:
+            logger.debug(f"Creating new track {next_vehicle_id} at frame {processed_frames}")
             tracked_vehicles[next_vehicle_id] = {
                 'box': detection['box'],
                 'class_id': detection['class_id'],
@@ -254,11 +270,11 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
         
         if not is_counted and consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= 2:
             vehicle_data['is_counted'] = True
-            
-            if 2 not in unique_vehicle_counts:
-                unique_vehicle_counts[2] = 0
-                
-            unique_vehicle_counts[2] += 1
+            count_class_id = 2
+            if count_class_id not in unique_vehicle_counts:
+                unique_vehicle_counts[count_class_id] = 0
+            unique_vehicle_counts[count_class_id] += 1
+            logger.info(f"Counted vehicle ID {vehicle_id} (stable). Total count: {unique_vehicle_counts[count_class_id]}")
     
     vehicles_to_remove = []
     for vehicle_id, vehicle_data in tracked_vehicles.items():
@@ -266,6 +282,7 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
             vehicles_to_remove.append(vehicle_id)
     
     for vehicle_id in vehicles_to_remove:
+        logger.debug(f"Removing disappeared track {vehicle_id} at frame {processed_frames}")
         tracked_vehicles.pop(vehicle_id)
     
     return tracked_vehicles, unique_vehicle_counts
