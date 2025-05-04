@@ -114,6 +114,28 @@ def create_video_writer(cap: cv2.VideoCapture, target_fps: int) -> Tuple[cv2.Vid
         logger.error(f"Failed to create VideoWriter: {e}")
         raise
 
+# Define a list of distinct colors (BGR format)
+# Add more colors if you have more classes
+CLASS_COLORS = [
+    (255, 0, 0),    # Blue    (Index 0)
+    (0, 255, 0),    # Lime    (Index 1)
+    (0, 0, 255),    # Red     (Index 2)
+    (255, 255, 0),  # Cyan    (Index 3)
+    (255, 0, 255),  # Magenta (Index 4)
+    (255, 165, 0),  # Orange (Index 5 - Assuming Bus ID is 5, changed from Yellow)
+    (128, 0, 0),    # Navy    (Index 6)
+    (0, 128, 0),    # Green   (Index 7)
+    (0, 0, 128),    # Maroon  (Index 8)
+    (128, 128, 0),  # Teal    (Index 9)
+    (128, 0, 128),  # Purple  (Index 10)
+    (0, 128, 128),  # Olive   (Index 11)
+    (192, 192, 192),# Silver  (Index 12)
+    (128, 128, 128),# Gray    (Index 13)
+    (0, 255, 255),  # Yellow (Index 14 - Changed from Orange to avoid duplicate)
+    (255, 192, 203) # Pink    (Index 15)
+]
+DEFAULT_COLOR = (100, 100, 100) # Default color for unknown classes
+
 def annotate_frame(
     frame: np.ndarray,
     results: List[Any], # Type hint for results might need refinement based on ultralytics output
@@ -124,11 +146,15 @@ def annotate_frame(
 ) -> np.ndarray:
     """Annotates a single frame with detection boxes, ROI, tracking info, and counts."""
     annotated_frame = frame.copy() # Start with a fresh copy of the frame
+    # Define a darker green color (BGR)
+    green_color = (0, 128, 0) # Changed from (0, 255, 0)
 
     roi_config = CONFIG['roi']
     if roi_config['enabled']:
+        # ... (ROI drawing code remains the same)
         roi_coords = roi_config['coords']
-        roi_color = tuple(roi_config['color']) # Ensure color is a tuple
+        # Use the defined darker green color for ROI
+        roi_color = green_color # Use darker green for ROI
         roi_thickness = roi_config['thickness']
 
         roi_x1 = int(roi_coords[0] * frame_width)
@@ -136,12 +162,14 @@ def annotate_frame(
         roi_x2 = int(roi_coords[2] * frame_width)
         roi_y2 = int(roi_coords[3] * frame_height)
 
-        # Draw semi-transparent overlay
-        overlay = annotated_frame.copy()
-        cv2.rectangle(overlay, (roi_x1, roi_y1), (roi_x2, roi_y2), roi_color, -1)
-        cv2.addWeighted(overlay, CONFIG['annotation']['roi_overlay_alpha'], annotated_frame, 1.0 - CONFIG['annotation']['roi_overlay_alpha'], 0, annotated_frame)
+        # --- Remove semi-transparent overlay --- 
+        # overlay_color = tuple(roi_config['color'])
+        # overlay = annotated_frame.copy()
+        # cv2.rectangle(overlay, (roi_x1, roi_y1), (roi_x2, roi_y2), overlay_color, -1)
+        # cv2.addWeighted(overlay, CONFIG['annotation']['roi_overlay_alpha'], annotated_frame, 1.0 - CONFIG['annotation']['roi_overlay_alpha'], 0, annotated_frame)
+        # --- End removal --- 
 
-        # Draw ROI border and text
+        # Draw ROI border and text using darker green color
         cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), roi_color, roi_thickness)
         cv2.putText(annotated_frame, "ROI", (roi_x1 + 10, roi_y1 + 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_color, 2)
@@ -151,30 +179,39 @@ def annotate_frame(
         class_names = CONFIG['model']['class_names']
         for vehicle_id, vehicle_data in tracked_vehicles.items():
             box = vehicle_data['box']
-            is_counted = vehicle_data.get('is_counted', False)
             is_predicted = vehicle_data.get('predicted', False)
             stability = vehicle_data.get('detection_stability', 0)
             class_id = vehicle_data.get('class_id', 2) # Default to a vehicle class if missing
 
-            class_name = class_names.get(class_id, "vehicle") # Use class name from config
+            class_name = class_names.get(class_id, f"cls_{class_id}") # Use class name or ID
 
-            # Determine color based on state
-            if is_counted:
-                color = (0, 255, 0) # Green
-            elif stability >= 3:
-                color = (0, 255, 255) # Yellow
-            else:
-                color = (0, 165, 255) # Orange
+            # --- Determine color based on class ID --- 
+            # Use modulo operator to cycle through colors if more classes than defined colors
+            color_index = class_id % len(CLASS_COLORS)
+            color = CLASS_COLORS[color_index]
+            # --- End color determination --- 
 
             thickness = 1 if is_predicted else 2
             line_type = cv2.LINE_AA
 
             # Draw box (dashed if predicted)
             if is_predicted:
-                pts = np.array([[box[0], box[1]], [box[2], box[1]],
-                                [box[2], box[3]], [box[0], box[3]]], np.int32)
-                pts = pts.reshape((-1, 1, 2))
-                cv2.polylines(annotated_frame, [pts], True, color, thickness, lineType=line_type)
+                # Draw dashed line for predicted box
+                dash_length = 10
+                num_dashes_x = int((box[2] - box[0]) / dash_length)
+                num_dashes_y = int((box[3] - box[1]) / dash_length)
+                # Draw top and bottom dashed lines
+                for i in range(0, num_dashes_x, 2):
+                    start_x = int(box[0] + i * dash_length)
+                    end_x = int(min(box[0] + (i + 1) * dash_length, box[2]))
+                    cv2.line(annotated_frame, (start_x, int(box[1])), (end_x, int(box[1])), color, thickness, lineType=line_type)
+                    cv2.line(annotated_frame, (start_x, int(box[3])), (end_x, int(box[3])), color, thickness, lineType=line_type)
+                # Draw left and right dashed lines
+                for i in range(0, num_dashes_y, 2):
+                    start_y = int(box[1] + i * dash_length)
+                    end_y = int(min(box[1] + (i + 1) * dash_length, box[3]))
+                    cv2.line(annotated_frame, (int(box[0]), start_y), (int(box[0]), end_y), color, thickness, lineType=line_type)
+                    cv2.line(annotated_frame, (int(box[2]), start_y), (int(box[2]), end_y), color, thickness, lineType=line_type)
             else:
                 cv2.rectangle(annotated_frame,
                               (int(box[0]), int(box[1])),
@@ -189,15 +226,15 @@ def annotate_frame(
                         cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['tracking_label_font_scale'], color, 1, cv2.LINE_AA)
 
     # Draw count display
-    # Use color and scales from config
-    color = tuple(CONFIG['annotation']['count_display_color'])
+    # Use the defined darker green color for count display
+    count_display_color = green_color # Use darker green for count text
     title_text = "Conteo"
     title_size, _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], 2)
     title_x = frame_width - title_size[0] - 10
     y_pos = 40
 
     cv2.putText(annotated_frame, title_text, (title_x, y_pos),
-                cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], color, 2)
+                cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], count_display_color, 2)
     y_pos += 30
 
     # Use the spanish name from config
@@ -207,7 +244,7 @@ def annotate_frame(
     text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], 2)
     text_x = frame_width - text_size[0] - 10
 
-    cv2.putText(annotated_frame, text, (text_x, y_pos),
-                cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], color, 2)
+    # Ensure the putText call is correctly formatted on a single line
+    cv2.putText(annotated_frame, text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], count_display_color, 2)
 
     return annotated_frame
