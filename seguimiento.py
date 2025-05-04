@@ -1,6 +1,7 @@
 import numpy as np
 from collections import deque
 import logging
+from typing import Dict, List, Tuple, Any, Set, Deque
 
 # Import config and utility functions
 from utiles import (
@@ -13,14 +14,22 @@ logger = logging.getLogger(__name__)
 # Load tracking parameters from config
 TRACKING_CONFIG = CONFIG['tracking']
 IOU_THRESHOLD = TRACKING_CONFIG['iou_threshold']
-OVERLAP_THRESHOLD = TRACKING_CONFIG['overlap_threshold']
+OVERLAP_THRESHOLD = TRACKING_CONFIG['overlap_threshold'] # Note: OVERLAP_THRESHOLD is defined but not used directly, overlap logic is in calculate_match_score and proximity checks
 DISAPPEAR_THRESHOLD = TRACKING_CONFIG['disappear_threshold']
 MIN_CONSECUTIVE_DETECTIONS = TRACKING_CONFIG['min_consecutive_detections']
 MAX_PREDICTION_FRAMES = TRACKING_CONFIG['max_prediction_frames']
 CLASS_HISTORY_SIZE = TRACKING_CONFIG['class_history_size']
 COOLDOWN_FRAMES = TRACKING_CONFIG['cooldown_frames']
 
-def group_overlapping_detections(current_detections):
+# Load tunable parameters from config
+PARAMS = TRACKING_CONFIG['parameters']
+SCORE_WEIGHTS = PARAMS['score_weights']
+VELOCITY_ALPHA = PARAMS['velocity_alpha']
+PREDICTION_MATCH_THRESHOLD = PARAMS['prediction_match_threshold']
+PROXIMITY_THRESHOLDS = PARAMS['proximity_thresholds']
+COUNTING_STABILITY_THRESHOLD = PARAMS['counting_stability_threshold']
+
+def group_overlapping_detections(current_detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Groups highly overlapping detections, keeping the one with highest confidence."""
     sorted_detections = sorted(enumerate(current_detections), key=lambda x: x[1]['confidence'], reverse=True)
     grouped_detections = []
@@ -50,7 +59,13 @@ def group_overlapping_detections(current_detections):
     
     return grouped_detections
 
-def calculate_match_score(detection, vehicle_data, frame_width, frame_height, processed_frames):
+def calculate_match_score(
+    detection: Dict[str, Any],
+    vehicle_data: Dict[str, Any],
+    frame_width: int,
+    frame_height: int,
+    processed_frames: int
+) -> float:
     """Calculates a score indicating how well a detection matches a tracked vehicle."""
     det_center = calculate_center(detection['box'])
     det_size = calculate_size(detection['box'])
@@ -82,26 +97,35 @@ def calculate_match_score(detection, vehicle_data, frame_width, frame_height, pr
     class_consistency = 1.0
     if 'class_history' in vehicle_data and len(vehicle_data['class_history']) > 1:
         unique_classes = len(set(vehicle_data['class_history']))
-        class_consistency = 1.0 / unique_classes
-        
-    score = (iou * 0.4) + (area_overlap * 0.2) + (size_ratio * 0.1) + \
-           ((1.0 - norm_distance) * 0.15) + (direction_score * 0.1) + \
-           (recency_factor * 0.05)
-    
+        class_consistency = 1.0 / unique_classes # Simple consistency measure
+
+    # Use weights from config
+    score = (iou * SCORE_WEIGHTS['iou']) + \
+            (area_overlap * SCORE_WEIGHTS['area_overlap']) + \
+            (size_ratio * SCORE_WEIGHTS['size_ratio']) + \
+            ((1.0 - norm_distance) * SCORE_WEIGHTS['norm_distance']) + \
+            (direction_score * SCORE_WEIGHTS['direction_score']) + \
+            (recency_factor * SCORE_WEIGHTS['recency_factor'])
+
     if is_box_contained(vehicle_data['box'], detection['box']):
-        score += 0.15
-        
+        score += SCORE_WEIGHTS['contained_bonus']
+
     return score
 
-def update_tracked_vehicle(vehicle_data, detection, processed_frames):
+def update_tracked_vehicle(
+    vehicle_data: Dict[str, Any],
+    detection: Dict[str, Any],
+    processed_frames: int
+) -> Dict[str, Any]:
     """Updates the state of a tracked vehicle with a new matching detection."""
     old_center = calculate_center(vehicle_data['box'])
     new_center = calculate_center(detection['box'])
     
     if 'velocity' not in vehicle_data:
         vehicle_data['velocity'] = (0, 0)
-    
-    alpha = 0.7
+
+    # Use alpha from config
+    alpha = VELOCITY_ALPHA
     dx = new_center[0] - old_center[0]
     dy = new_center[1] - old_center[1]
     vehicle_data['velocity'] = (
@@ -123,7 +147,14 @@ def update_tracked_vehicle(vehicle_data, detection, processed_frames):
     
     return vehicle_data
 
-def match_with_predicted_positions(remaining_detections, tracked_vehicles, matched_vehicles, processed_frames, frame_width, frame_height):
+def match_with_predicted_positions(
+    remaining_detections: List[Dict[str, Any]],
+    tracked_vehicles: Dict[int, Dict[str, Any]],
+    matched_vehicles: Set[int],
+    processed_frames: int,
+    frame_width: int,
+    frame_height: int
+) -> Tuple[List[Dict[str, Any]], Set[int]]:
     """Attempts to match remaining detections with predicted positions of lost tracks."""
     still_unmatched = []
     
@@ -147,9 +178,10 @@ def match_with_predicted_positions(remaining_detections, tracked_vehicles, match
                 det_size = calculate_size(detection['box'])
                 veh_size = calculate_size(vehicle_data['box'])
                 size_ratio = min(det_size, veh_size) / max(det_size, veh_size)
-                
-                match_quality = (1 - normalized_dist) * 0.7 + size_ratio * 0.3
-                if match_quality > 0.6:
+
+                # Use threshold from config
+                match_quality = (1 - normalized_dist) * 0.7 + size_ratio * 0.3 # Keep this simple heuristic or make it configurable too?
+                if match_quality > PREDICTION_MATCH_THRESHOLD:
                     if 'class_history' not in vehicle_data:
                         vehicle_data['class_history'] = deque(maxlen=CLASS_HISTORY_SIZE)
                     vehicle_data['class_history'].append(detection['class_id'])
@@ -168,7 +200,14 @@ def match_with_predicted_positions(remaining_detections, tracked_vehicles, match
     
     return still_unmatched, matched_vehicles
 
-def process_detections(current_detections, tracked_vehicles, processed_frames, unique_vehicle_counts, frame_width, frame_height):
+def process_detections(
+    current_detections: List[Dict[str, Any]],
+    tracked_vehicles: Dict[int, Dict[str, Any]],
+    processed_frames: int,
+    unique_vehicle_counts: Dict[int, int],
+    frame_width: int,
+    frame_height: int
+) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, int]]:
     """Processes current frame detections to update tracked vehicles and count new ones."""
     matched_vehicles = set()
     next_vehicle_id = max(tracked_vehicles.keys()) + 1 if tracked_vehicles else 0
@@ -205,17 +244,18 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
             veh_center = calculate_center(vehicle_data['box'])
             distance = calculate_distance(det_center, veh_center)
             frames_since_seen = processed_frames - vehicle_data['last_seen']
-            
-            if distance < 20 and frames_since_seen < COOLDOWN_FRAMES:
+
+            # Use proximity thresholds from config
+            if distance < PROXIMITY_THRESHOLDS['distance_close'] and frames_since_seen < COOLDOWN_FRAMES:
                 too_close_to_existing = True
                 break
-                
-            if frames_since_seen >= DISAPPEAR_THRESHOLD and distance < 15:
+
+            if frames_since_seen >= DISAPPEAR_THRESHOLD and distance < PROXIMITY_THRESHOLDS['distance_disappeared']:
                 too_close_to_existing = True
                 break
-                
+
             overlap = calculate_overlap_area(vehicle_data['box'], detection['box'])
-            if overlap > 0.7 and frames_since_seen < 5:
+            if overlap > PROXIMITY_THRESHOLDS['overlap_close'] and frames_since_seen < PROXIMITY_THRESHOLDS['frames_close']:
                 too_close_to_existing = True
                 break
                 
@@ -262,20 +302,33 @@ def process_detections(current_detections, tracked_vehicles, processed_frames, u
                 
                 if 'detection_stability' in vehicle_data:
                     vehicle_data['detection_stability'] = max(0, vehicle_data['detection_stability'] - 0.5)
-    
+
+    # Use configured vehicle classes for counting check
+    vehicle_classes_for_counting = set(CONFIG['model']['vehicle_classes'])
+
     for vehicle_id, vehicle_data in tracked_vehicles.items():
         consecutive_matches = vehicle_data.get('consecutive_matches', 0)
         stability = vehicle_data.get('detection_stability', 0)
         is_counted = vehicle_data.get('is_counted', False)
-        
-        if not is_counted and consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= 2:
+        current_class_id = vehicle_data.get('class_id') # Get the current determined class ID
+
+        # Check if the vehicle's class is one we should count
+        # Use counting stability threshold from config
+        if not is_counted and current_class_id in vehicle_classes_for_counting and \
+           consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= COUNTING_STABILITY_THRESHOLD:
+
             vehicle_data['is_counted'] = True
-            count_class_id = 2
-            if count_class_id not in unique_vehicle_counts:
-                unique_vehicle_counts[count_class_id] = 0
-            unique_vehicle_counts[count_class_id] += 1
-            logger.info(f"Counted vehicle ID {vehicle_id} (stable). Total count: {unique_vehicle_counts[count_class_id]}")
-    
+            # Increment the master count (using a consistent key, e.g., the first vehicle class ID or a generic key)
+            # Let's use the first vehicle class ID from config as the key in unique_vehicle_counts
+            # Or better, let save_vehicle_counts_to_json handle the aggregation.
+            # We just need to ensure this vehicle is marked counted.
+            # The actual aggregation happens in save_vehicle_counts_to_json based on all values in unique_vehicle_counts.
+            # Let's increment the count for the specific class detected.
+            if current_class_id not in unique_vehicle_counts:
+                 unique_vehicle_counts[current_class_id] = 0
+            unique_vehicle_counts[current_class_id] += 1
+            logger.info(f"Counted vehicle ID {vehicle_id} (Class: {current_class_id}, Stable). Total for class {current_class_id}: {unique_vehicle_counts[current_class_id]}")
+
     vehicles_to_remove = []
     for vehicle_id, vehicle_data in tracked_vehicles.items():
         if processed_frames - vehicle_data['last_seen'] > DISAPPEAR_THRESHOLD:

@@ -5,21 +5,22 @@ import numpy as np
 from ultralytics import YOLO
 from datetime import datetime
 import logging
+from typing import Dict, List, Tuple, Any, Optional
 
 # Import config from utiles
 from utiles import CONFIG, calculate_center, is_in_roi
 
 logger = logging.getLogger(__name__)
 
-def get_youtube_stream(video_url):
+def get_youtube_stream(video_url: str) -> str:
     """Fetches the best available stream URL for a given YouTube video URL."""
     ydl_opts = {
-        'format': 'best[height>=360][height<=480]/best[height<=720]/best',
+        'format': f'best[height>={CONFIG["youtube"]["min_height"]}][height<={CONFIG["youtube"]["max_height"]}]/best[height<={CONFIG["youtube"]["fallback_max_height"]}]/best',
         'quiet': True,
-        'buffersize': 32768,
+        'buffersize': CONFIG["youtube"]["buffer_size"],
         'no-check-certificate': True,
-        'socket_timeout': 30,
-        'retries': 10
+        'socket_timeout': CONFIG["youtube"]["socket_timeout"],
+        'retries': CONFIG["youtube"]["retries"]
     }
 
     logger.info(f"Attempting to fetch stream URL for: {video_url}")
@@ -32,14 +33,14 @@ def get_youtube_stream(video_url):
                 return info['url']
 
             elif 'formats' in info and info['formats']:
-                # Prioritize formats between 360p and 480p
+                # Use height parameters from config
                 suitable_formats = [f for f in info['formats']
-                                   if f.get('height', 0) >= 360 and f.get('height', 0) <= 480
+                                   if f.get('height', 0) >= CONFIG["youtube"]["min_height"] and f.get('height', 0) <= CONFIG["youtube"]["max_height"]
                                    and f.get('url')]
 
                 if not suitable_formats:
                     # Fallback to any format with a URL if no suitable resolution found
-                    logger.warning("No stream found in 360p-480p range, looking for any available format.")
+                    logger.warning(f"No stream found in {CONFIG['youtube']['min_height']}p-{CONFIG['youtube']['max_height']}p range, looking for any available format.")
                     suitable_formats = [f for f in info['formats'] if f.get('url')]
 
                 if suitable_formats:
@@ -64,7 +65,7 @@ def get_youtube_stream(video_url):
         logger.error(f"Unexpected error getting YouTube stream: {e}")
         raise ConnectionError(f"Error inesperado al obtener stream: {str(e)}")
 
-def initialize_model(device):
+def initialize_model(device: str) -> YOLO:
     """Initializes and loads the YOLO model onto the specified device."""
     model_path = CONFIG['model']['model_path']
     logger.info(f"Loading model from: {model_path} onto device: {device}")
@@ -77,7 +78,7 @@ def initialize_model(device):
         logger.error(f"Failed to load model: {e}")
         raise
 
-def create_video_writer(cap, target_fps):
+def create_video_writer(cap: cv2.VideoCapture, target_fps: int) -> Tuple[cv2.VideoWriter, int, int, str]:
     """Creates a VideoWriter object for saving the annotated video."""
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -95,9 +96,9 @@ def create_video_writer(cap, target_fps):
     current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     video_filename = os.path.join(videos_dir, f'video_{current_datetime}.avi')
 
-    # Consider allowing codec choice via config
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG') # Or 'XVID', 'mp4v'
-    logger.info(f"Creating video writer. Filename: {video_filename}, FPS: {target_fps}, Resolution: {frame_width}x{frame_height}")
+    # Use codec from config
+    fourcc = cv2.VideoWriter_fourcc(*CONFIG['output']['video']['codec'])
+    logger.info(f"Creating video writer. Filename: {video_filename}, FPS: {target_fps}, Resolution: {frame_width}x{frame_height}, Codec: {CONFIG['output']['video']['codec']}")
 
     try:
         writer = cv2.VideoWriter(
@@ -113,7 +114,14 @@ def create_video_writer(cap, target_fps):
         logger.error(f"Failed to create VideoWriter: {e}")
         raise
 
-def annotate_frame(frame, results, unique_vehicle_counts, frame_width, frame_height, tracked_vehicles=None):
+def annotate_frame(
+    frame: np.ndarray,
+    results: List[Any], # Type hint for results might need refinement based on ultralytics output
+    unique_vehicle_counts: Dict[int, int],
+    frame_width: int,
+    frame_height: int,
+    tracked_vehicles: Optional[Dict[int, Dict[str, Any]]] = None
+) -> np.ndarray:
     """Annotates a single frame with detection boxes, ROI, tracking info, and counts."""
     annotated_frame = results[0].plot() # Use YOLO's plotting
 
@@ -131,7 +139,7 @@ def annotate_frame(frame, results, unique_vehicle_counts, frame_width, frame_hei
         # Draw semi-transparent overlay
         overlay = annotated_frame.copy()
         cv2.rectangle(overlay, (roi_x1, roi_y1), (roi_x2, roi_y2), roi_color, -1)
-        cv2.addWeighted(overlay, 0.3, annotated_frame, 0.7, 0, annotated_frame)
+        cv2.addWeighted(overlay, CONFIG['annotation']['roi_overlay_alpha'], annotated_frame, 1.0 - CONFIG['annotation']['roi_overlay_alpha'], 0, annotated_frame)
 
         # Draw ROI border and text
         cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), roi_color, roi_thickness)
@@ -175,29 +183,31 @@ def annotate_frame(frame, results, unique_vehicle_counts, frame_width, frame_hei
 
             # Draw label
             label_text = f"ID:{vehicle_id} ({class_name[:3]}) S:{int(stability)}"
+            # Use font scale from config
             cv2.putText(annotated_frame, label_text,
                         (int(box[0]), int(box[1] - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['tracking_label_font_scale'], color, 1, cv2.LINE_AA)
 
     # Draw count display
-    color = (0, 128, 255) # Orange-Red for count display
+    # Use color and scales from config
+    color = tuple(CONFIG['annotation']['count_display_color'])
     title_text = "Conteo"
-    title_size, _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+    title_size, _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], 2)
     title_x = frame_width - title_size[0] - 10
     y_pos = 40
 
     cv2.putText(annotated_frame, title_text, (title_x, y_pos),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], color, 2)
     y_pos += 30
 
     # Use the spanish name from config
     spanish_name = CONFIG['model']['spanish_names'].get("vehicle", "vehiculo")
     total_vehicles = sum(unique_vehicle_counts.values()) # Sum all counted vehicles
     text = f"{spanish_name.capitalize()}: {total_vehicles}"
-    text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], 2)
     text_x = frame_width - text_size[0] - 10
 
     cv2.putText(annotated_frame, text, (text_x, y_pos),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], color, 2)
 
     return annotated_frame

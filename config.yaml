@@ -26,6 +26,24 @@ tracking:
   min_consecutive_detections: 1
   max_prediction_frames: 15
   class_history_size: 5
+  # New section for tunable parameters
+  parameters:
+    score_weights:
+      iou: 0.4
+      area_overlap: 0.2
+      size_ratio: 0.1
+      norm_distance: 0.15 # Weight for (1 - norm_distance)
+      direction_score: 0.1
+      recency_factor: 0.05
+      contained_bonus: 0.15
+    velocity_alpha: 0.7 # Smoothing factor for velocity update
+    prediction_match_threshold: 0.6 # Min quality score for matching with predicted position
+    proximity_thresholds:
+      distance_close: 20 # Max distance to consider 'too close' for recent tracks
+      distance_disappeared: 15 # Max distance to consider 'too close' for disappeared tracks
+      overlap_close: 0.7 # Min overlap to consider 'too close' for recent tracks
+      frames_close: 5 # Max frames since seen for overlap check
+    counting_stability_threshold: 2 # Min stability score required to count a vehicle
 
 roi:
   enabled: True
@@ -36,6 +54,26 @@ roi:
 output:
   video_dir: "videos"
   count_file: "conteo.json"
+  # New section for video output parameters
+  video:
+    codec: "MJPG" # e.g., MJPG, XVID, mp4v
+
+# New section for YouTube stream parameters
+youtube:
+  min_height: 360
+  max_height: 480
+  fallback_max_height: 720
+  buffer_size: 32768
+  socket_timeout: 30
+  retries: 10
+
+# New section for annotation parameters
+annotation:
+  roi_overlay_alpha: 0.3
+  tracking_label_font_scale: 0.5
+  count_display_title_scale: 0.8
+  count_display_text_scale: 0.6
+  count_display_color: [0, 128, 255] # Orange-Red
 
 logging:
   level: "INFO"

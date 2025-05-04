@@ -5,12 +5,17 @@ import io
 import numpy as np
 import yaml
 import logging
+from typing import Dict, List, Tuple, Any, Deque, Optional, Union
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_config = yaml.safe_load(open('config.yaml', 'r')).get('logging', {})
+log_level = log_config.get('level', 'INFO').upper()
+log_format = log_config.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format=log_format)
 logger = logging.getLogger(__name__)
 
-def load_config(config_path='config.yaml'):
+def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
     """Loads configuration from a YAML file."""
     try:
         with open(config_path, 'r') as f:
@@ -32,9 +37,9 @@ def load_config(config_path='config.yaml'):
 
 # Load config globally or pass it around. Loading globally for simplicity here.
 # Consider dependency injection for larger projects.
-CONFIG = load_config()
+CONFIG: Dict[str, Any] = load_config()
 
-def calculate_iou(box1, box2):
+def calculate_iou(box1: List[float], box2: List[float]) -> float:
     """Calculates the Intersection over Union (IoU) between two bounding boxes."""
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
@@ -49,23 +54,23 @@ def calculate_iou(box1, box2):
     
     return intersection / union if union > 0 else 0
 
-def calculate_size(box):
+def calculate_size(box: List[float]) -> float:
     """Calculates the area of a bounding box."""
     width = box[2] - box[0]
     height = box[3] - box[1]
     return width * height
 
-def calculate_center(box):
+def calculate_center(box: List[float]) -> Tuple[float, float]:
     """Calculates the center coordinates of a bounding box."""
     center_x = (box[0] + box[2]) / 2
     center_y = (box[1] + box[3]) / 2
     return (center_x, center_y)
 
-def calculate_distance(center1, center2):
+def calculate_distance(center1: Tuple[float, float], center2: Tuple[float, float]) -> float:
     """Calculates the Euclidean distance between two points."""
     return np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
 
-def calculate_overlap_area(box1, box2):
+def calculate_overlap_area(box1: List[float], box2: List[float]) -> float:
     """Calculates the overlap area as a fraction of the smaller box area."""
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
@@ -83,7 +88,7 @@ def calculate_overlap_area(box1, box2):
     smaller_area = min(area_box1, area_box2)
     return intersection / smaller_area if smaller_area > 0 else 0.0
 
-def is_box_contained(box1, box2, threshold=0.8):
+def is_box_contained(box1: List[float], box2: List[float], threshold: float = 0.8) -> bool:
     """Checks if box1 is largely contained within box2 or vice-versa."""
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
@@ -101,7 +106,7 @@ def is_box_contained(box1, box2, threshold=0.8):
     smaller_area = min(area_box1, area_box2)
     return intersection / smaller_area >= threshold
 
-def get_most_common_class(class_history):
+def get_most_common_class(class_history: Deque[int]) -> int:
     """Determines the most frequent class ID in a history deque."""
     if not class_history:
         return 2
@@ -115,7 +120,7 @@ def get_most_common_class(class_history):
     
     return max(class_counts, key=class_counts.get)
 
-def is_in_roi(box, frame_width, frame_height):
+def is_in_roi(box: List[float], frame_width: int, frame_height: int) -> bool:
     """Checks if the center of a bounding box is within the defined ROI."""
     roi_config = CONFIG['roi']
     if not roi_config['enabled']:
@@ -147,7 +152,7 @@ def is_in_roi(box, frame_width, frame_height):
     return (roi_pixels[0] <= center_x <= roi_pixels[2] and 
             roi_pixels[1] <= center_y <= roi_pixels[3])
 
-def save_vehicle_counts_to_json(counts):
+def save_vehicle_counts_to_json(counts: Dict[int, int]):
     """Saves the counted vehicle numbers to a JSON file, updating existing counts."""
     output_file = CONFIG['output']['count_file']
     current_data = {}

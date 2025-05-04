@@ -1,23 +1,23 @@
 import time
 import torch
-# Removed contextlib import
 import cv2
 import numpy as np
 from collections import deque
 import os
 import logging
 import sys
+from typing import Dict, Any, Optional, Tuple, List
+from ultralytics import YOLO # Assuming YOLO type can be imported
 
 # Import config and utility functions
-# Removed FilteredStderr from import
-# Access CONFIG directly for all parameters
 from utiles import CONFIG, save_vehicle_counts_to_json, is_in_roi, calculate_center
 from seguimiento import process_detections
 from video import get_youtube_stream, create_video_writer, annotate_frame, initialize_model
 
-def setup_gpu():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-    
+def setup_gpu() -> str:
+    # Use GPU config
+    os.environ["CUDA_VISIBLE_DEVICES"] = CONFIG.get('gpu', {}).get('cuda_visible_devices', "0")
+
     if torch.cuda.is_available():
         device = 'cuda'
         gpu_name = torch.cuda.get_device_name(0)
@@ -32,7 +32,13 @@ def setup_gpu():
         print("Versión de PyTorch:", torch.__version__)
         return device
 
-def process_video(model, device, video_stream, duration, target_fps):
+def process_video(
+    model: YOLO,
+    device: str,
+    video_stream: str,
+    duration: int,
+    target_fps: int
+) -> Optional[Dict[int, int]]:
     start_time = time.time()
     
     cap = cv2.VideoCapture(video_stream)
@@ -48,10 +54,10 @@ def process_video(model, device, video_stream, duration, target_fps):
     
     frame_count = int(duration * target_fps)
     # Use CONFIG for vehicle classes
-    unique_vehicle_counts = {class_id: 0 for class_id in CONFIG['model']['vehicle_classes']}
-    tracked_vehicles = {}
+    unique_vehicle_counts: Dict[int, int] = {class_id: 0 for class_id in CONFIG['model']['vehicle_classes']}
+    tracked_vehicles: Dict[int, Dict[str, Any]] = {}
     
-    frame_buffer = deque(maxlen=60)
+    frame_buffer: deque = deque(maxlen=60)
     
     processed_frames = 0
     real_frame = 0
@@ -60,7 +66,7 @@ def process_video(model, device, video_stream, duration, target_fps):
     print(f"Resolución del vídeo: {CONFIG['video']['input_resolution']}x{CONFIG['video']['input_resolution']}\nSalto de frame: {CONFIG['video']['frame_skip']}\nConfianza: {CONFIG['video']['confidence']}")
     print(f"Parámetros de tracking: IOU={CONFIG['tracking']['iou_threshold']}, Desaparición={CONFIG['tracking']['disappear_threshold']}")
     
-    current_results = None
+    current_results: Optional[Any] = None
     stream_failed = False
     reconnect_attempts = 0
     max_reconnect_attempts = 10
@@ -112,8 +118,8 @@ def process_video(model, device, video_stream, duration, target_fps):
                     reconnect_attempts += 1
         
         if len(frame_buffer) > 0:
-            current_frame = frame_buffer.popleft()
-        elif 'annotated_frame' in locals():
+            current_frame: np.ndarray = frame_buffer.popleft()
+        elif 'annotated_frame' in locals() and isinstance(annotated_frame, np.ndarray):
             current_frame = annotated_frame.copy()
             cv2.putText(current_frame, "BUFFER VACÍO - FRAME DUPLICADO", 
                         (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
@@ -143,7 +149,7 @@ def process_video(model, device, video_stream, duration, target_fps):
             )
             current_results = results
             
-            current_detections = []
+            current_detections: List[Dict[str, Any]] = []
             
             for result in results:
                 for detection in result.boxes:
@@ -158,7 +164,7 @@ def process_video(model, device, video_stream, duration, target_fps):
                         if in_roi:
                             current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
                             if processed_frames % 30 == 0:
-                                center = calculate_center(box)
+                                center: Tuple[float, float] = calculate_center(box)
             
             tracked_vehicles, unique_vehicle_counts = process_detections(
                 current_detections, 
@@ -170,7 +176,7 @@ def process_video(model, device, video_stream, duration, target_fps):
             )
         
         if current_results is not None:
-            annotated_frame = annotate_frame(
+            annotated_frame: np.ndarray = annotate_frame(
                 current_frame, 
                 current_results, 
                 unique_vehicle_counts, 
@@ -198,23 +204,23 @@ def process_video(model, device, video_stream, duration, target_fps):
     
     return unique_vehicle_counts
 
-def main():
+def main() -> None:
     device = setup_gpu()
     
     print("Cargando modelo YOLO...")
-    model = initialize_model(device)
+    model: YOLO = initialize_model(device)
     
     print("Conexión al stream de YouTube...")
     try:
         # Use CONFIG for YouTube URL
-        video_stream = get_youtube_stream(CONFIG['video']['youtube_url'])
+        video_stream: str = get_youtube_stream(CONFIG['video']['youtube_url'])
     except Exception as e:
         print(f"Error al conectar con YouTube: {e}")
         return
     
     print("Procesando vídeo...")
     # Use CONFIG for duration and target FPS
-    unique_vehicle_counts = process_video(
+    unique_vehicle_counts: Optional[Dict[int, int]] = process_video(
         model, 
         device, 
         video_stream, 
