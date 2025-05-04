@@ -63,7 +63,7 @@ def process_video(
     real_frame = 0
     
     # Use CONFIG for parameters
-    print(f"Resolución del vídeo: {CONFIG['video']['input_resolution']}x{CONFIG['video']['input_resolution']}\nSalto de frame: {CONFIG['video']['frame_skip']}\nConfianza: {CONFIG['video']['confidence']}")
+    print(f"Resolución del vídeo: {CONFIG['video']['input_resolution']}x{CONFIG['video']['input_resolution']}\nSalto de frame: {CONFIG['video']['frame_skip']}\nConfianza (default): {CONFIG['model']['confidence']['default']}")
     print(f"Parámetros de tracking: IOU={CONFIG['tracking']['iou_threshold']}, Desaparición={CONFIG['tracking']['disappear_threshold']}")
     
     current_results: Optional[Any] = None
@@ -138,33 +138,43 @@ def process_video(
         process_this_frame = (real_frame - 1) % skip_factor == 0
         
         if process_this_frame:
+            # Get the default confidence and per-class overrides from config
+            conf_settings = CONFIG['model']['confidence']
+            default_conf = conf_settings.get('default', 0.25) # Default if 'default' key is missing
+
+            # Pass only the default confidence to model.predict
             results = model.predict(
-                current_frame, 
-                # Use CONFIG for input resolution, confidence, vehicle classes
+                current_frame,
                 imgsz=CONFIG['video']['input_resolution'],
-                conf=CONFIG['video']['confidence'], 
-                verbose=False, 
+                conf=default_conf, # Use the default confidence value here
+                verbose=False,
                 classes=CONFIG['model']['vehicle_classes'],
                 device=device
             )
             current_results = results
-            
+
             current_detections: List[Dict[str, Any]] = []
-            
+
+            # Filter results based on per-class confidence AFTER prediction
             for result in results:
                 for detection in result.boxes:
                     class_id = int(detection.cls)
+                    # Determine the confidence threshold for this specific class
+                    class_conf_threshold = conf_settings.get(class_id, default_conf)
+
                     # Use CONFIG for vehicle classes
                     if class_id in CONFIG['model']['vehicle_classes']:
                         confidence = float(detection.conf)
-                        box = detection.xyxy[0].cpu().numpy()
-                        
-                        # Use CONFIG for ROI coords
-                        in_roi = is_in_roi(box, frame_width, frame_height) # is_in_roi now uses CONFIG internally
-                        if in_roi:
-                            current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
-                            if processed_frames % 30 == 0:
-                                center: Tuple[float, float] = calculate_center(box)
+                        # Check against the specific threshold for this class
+                        if confidence >= class_conf_threshold:
+                            box = detection.xyxy[0].cpu().numpy()
+
+                            # Use CONFIG for ROI coords
+                            in_roi = is_in_roi(box, frame_width, frame_height) # is_in_roi now uses CONFIG internally
+                            if in_roi:
+                                current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
+                                if processed_frames % 30 == 0:
+                                    center: Tuple[float, float] = calculate_center(box)
             
             tracked_vehicles, unique_vehicle_counts = process_detections(
                 current_detections, 

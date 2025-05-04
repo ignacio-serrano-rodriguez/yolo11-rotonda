@@ -2,21 +2,29 @@
 video:
   input_resolution: 480
   frame_skip: 2
-  confidence: 0.55
+  # confidence: 0.55 # Removed global confidence
   youtube_url: "https://www.youtube.com/watch?v=0dKNLFFcHFU"
   duration: 30 # seconds
   target_fps: 30
 
 model:
   class_names:
-    2: "vehicle"
-    3: "vehicle"
-    5: "vehicle"
-    7: "vehicle"
+    2: "car" # Assuming 2 is car
+    3: "motorcycle" # Explicitly define motorcycle
+    5: "bus" # Assuming 5 is bus
+    7: "truck" # Assuming 7 is truck
   spanish_names:
-    "vehicle": "vehiculo"
-  vehicle_classes: [2, 3, 5, 7]
+    "car": "coche"
+    "motorcycle": "moto"
+    "bus": "autobus"
+    "truck": "camion"
+    "vehicle_total": "vehiculos" # Generic name for total count
+  vehicle_classes: [2, 3, 5, 7] # All classes to detect
   model_path: "yolo11m.pt"
+  # Define confidence thresholds: default and per-class override
+  confidence:
+    default: 0.55
+    3: 0.01 # Lower confidence for motorcycles (class ID 3) - Set to minimum
 
 tracking:
   iou_threshold: 0.15
