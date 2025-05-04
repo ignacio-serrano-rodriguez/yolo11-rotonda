@@ -123,7 +123,7 @@ def annotate_frame(
     tracked_vehicles: Optional[Dict[int, Dict[str, Any]]] = None
 ) -> np.ndarray:
     """Annotates a single frame with detection boxes, ROI, tracking info, and counts."""
-    annotated_frame = results[0].plot() # Use YOLO's plotting
+    annotated_frame = frame.copy() # Start with a fresh copy of the frame
 
     roi_config = CONFIG['roi']
     if roi_config['enabled']:

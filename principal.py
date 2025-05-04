@@ -140,44 +140,36 @@ def process_video(
         if process_this_frame:
             # Get the default confidence and per-class overrides from config
             conf_settings = CONFIG['model']['confidence']
-            default_conf = conf_settings.get('default', 0.25) # Default if 'default' key is missing
+            # --- Find the minimum confidence threshold across all classes --- 
+            all_conf_values = [v for v in conf_settings.values() if isinstance(v, (int, float))]
+            min_conf_for_predict = min(all_conf_values) if all_conf_values else 0.01 # Use lowest defined or a small default
+            # ----------------------------------------------------------------
 
-            # Pass only the default confidence to model.predict
+            # Pass the minimum confidence to model.predict to ensure low-confidence classes are not filtered out early
             results = model.predict(
                 current_frame,
                 imgsz=CONFIG['video']['input_resolution'],
-                conf=default_conf, # Use the default confidence value here
+                conf=min_conf_for_predict, # Use the calculated minimum confidence value here
                 verbose=False,
                 classes=CONFIG['model']['vehicle_classes'],
                 device=device
             )
-            current_results = results
+            current_results = results # Keep results for annotation
 
-            current_detections: List[Dict[str, Any]] = []
-
-            # Filter results based on per-class confidence AFTER prediction
+            # --- Extract ALL detections passing the minimum threshold --- 
+            raw_detections: List[Dict[str, Any]] = []
             for result in results:
                 for detection in result.boxes:
-                    class_id = int(detection.cls)
-                    # Determine the confidence threshold for this specific class
-                    class_conf_threshold = conf_settings.get(class_id, default_conf)
-
-                    # Use CONFIG for vehicle classes
-                    if class_id in CONFIG['model']['vehicle_classes']:
-                        confidence = float(detection.conf)
-                        # Check against the specific threshold for this class
-                        if confidence >= class_conf_threshold:
-                            box = detection.xyxy[0].cpu().numpy()
-
-                            # Use CONFIG for ROI coords
-                            in_roi = is_in_roi(box, frame_width, frame_height) # is_in_roi now uses CONFIG internally
-                            if in_roi:
-                                current_detections.append({'box': box, 'class_id': class_id, 'confidence': confidence})
-                                if processed_frames % 30 == 0:
-                                    center: Tuple[float, float] = calculate_center(box)
+                    raw_detections.append({
+                        'box': detection.xyxy[0].cpu().numpy(),
+                        'class_id': int(detection.cls),
+                        'confidence': float(detection.conf)
+                    })
+            # ----------------------------------------------------------
             
+            # Pass raw detections to the tracking function (filtering will happen there)
             tracked_vehicles, unique_vehicle_counts = process_detections(
-                current_detections, 
+                raw_detections, # Pass the unfiltered (by class conf) list
                 tracked_vehicles, 
                 processed_frames, 
                 unique_vehicle_counts,

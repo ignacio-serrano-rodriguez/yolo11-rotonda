@@ -9,10 +9,10 @@ video:
 
 model:
   class_names:
-    2: "car" # Assuming 2 is car
-    3: "motorcycle" # Explicitly define motorcycle
-    5: "bus" # Assuming 5 is bus
-    7: "truck" # Assuming 7 is truck
+    2: "car"
+    3: "motorcycle"
+    5: "bus"
+    7: "truck"
   spanish_names:
     "car": "coche"
     "motorcycle": "moto"
@@ -23,8 +23,11 @@ model:
   model_path: "yolo11m.pt"
   # Define confidence thresholds: default and per-class override
   confidence:
-    default: 0.55
-    3: 0.01 # Lower confidence for motorcycles (class ID 3) - Set to minimum
+    default: 0.01 # Default confidence for all classes
+    2: 0.50 # Cars confidence
+    3: 0.10 # Motocycles confidence
+    5: 0.50 # Cars confidence
+    7: 0.50 # Truck confidence
 
 tracking:
   iou_threshold: 0.15

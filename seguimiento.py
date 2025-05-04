@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple, Any, Set, Deque
 # Import config and utility functions
 from utiles import (
     CONFIG, calculate_iou, calculate_center, calculate_size, calculate_distance,
-    calculate_overlap_area, is_box_contained, get_most_common_class
+    calculate_overlap_area, is_box_contained, get_most_common_class, is_in_roi
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,11 @@ VELOCITY_ALPHA = PARAMS['velocity_alpha']
 PREDICTION_MATCH_THRESHOLD = PARAMS['prediction_match_threshold']
 PROXIMITY_THRESHOLDS = PARAMS['proximity_thresholds']
 COUNTING_STABILITY_THRESHOLD = PARAMS['counting_stability_threshold']
+
+# Load model confidence settings
+MODEL_CONFIG = CONFIG['model']
+CONF_SETTINGS = MODEL_CONFIG['confidence']
+DEFAULT_CONF = CONF_SETTINGS.get('default', 0.25) # Default confidence if not specified
 
 def group_overlapping_detections(current_detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Groups highly overlapping detections, keeping the one with highest confidence."""
@@ -211,56 +216,96 @@ def process_detections(
     """Processes current frame detections to update tracked vehicles and count new ones."""
     matched_vehicles = set()
     next_vehicle_id = max(tracked_vehicles.keys()) + 1 if tracked_vehicles else 0
-    
-    grouped_detections = group_overlapping_detections(current_detections)
-    
+
+    # --- Filter detections based on class-specific confidence BEFORE grouping/matching ---
+    filtered_detections = []
+    for det in current_detections:
+        class_id = det['class_id']
+        confidence = det['confidence']
+        # Determine the confidence threshold for this specific class
+        class_conf_threshold = CONF_SETTINGS.get(class_id, DEFAULT_CONF)
+        if confidence >= class_conf_threshold:
+            filtered_detections.append(det)
+        # else: # Optional: Log discarded detections
+        #     logger.debug(f"Discarding detection (Class: {class_id}, Conf: {confidence:.2f}) below threshold {class_conf_threshold:.2f}")
+    # ------------------------------------------------------------------------------------
+
+    # Use the filtered list for grouping and matching
+    grouped_detections = group_overlapping_detections(filtered_detections) # Use filtered list
+
     unmatched_detections = []
-    
+
     for detection in grouped_detections:
         best_match = None
-        best_score = IOU_THRESHOLD
-        
+        best_score = IOU_THRESHOLD # Use IOU_THRESHOLD as minimum score for matching existing tracks
+
         for vehicle_id, vehicle_data in tracked_vehicles.items():
+            # Only consider matching if the vehicle hasn't been matched already in this frame
+            if vehicle_id in matched_vehicles:
+                continue
+
             score = calculate_match_score(detection, vehicle_data, frame_width, frame_height, processed_frames)
             if score > best_score:
                 best_score = score
                 best_match = vehicle_id
-        
+
         if best_match is not None:
-            tracked_vehicles[best_match] = update_tracked_vehicle(tracked_vehicles[best_match], detection, processed_frames)
-            matched_vehicles.add(best_match)
+            # Check if this detection is already assigned to another track (can happen with overlapping high scores)
+            if best_match not in matched_vehicles:
+                 tracked_vehicles[best_match] = update_tracked_vehicle(tracked_vehicles[best_match], detection, processed_frames)
+                 matched_vehicles.add(best_match)
+            else:
+                 # This detection matched strongly with a vehicle that was already matched by another detection.
+                 # Add it to unmatched for potential prediction matching or new track creation if confidence is high enough.
+                 unmatched_detections.append(detection)
         else:
+            # No existing track matched well enough, add to unmatched list
             unmatched_detections.append(detection)
-    
+
+    # Attempt to match remaining detections with predicted positions
     unmatched_detections, matched_vehicles = match_with_predicted_positions(
         unmatched_detections, tracked_vehicles, matched_vehicles, processed_frames, frame_width, frame_height
     )
-    
+
+    # Create new tracks for remaining unmatched detections (already passed confidence check)
     for detection in unmatched_detections:
+        # The confidence check is already done at the beginning of the function.
+        # We just need to check proximity before creating a new track.
         det_center = calculate_center(detection['box'])
         too_close_to_existing = False
-        
+
         for vehicle_id, vehicle_data in tracked_vehicles.items():
+            # Check proximity only against vehicles that were *actually seen* recently or are predicted
+            # Avoid checking against very old disappeared tracks unless specifically needed
+            if vehicle_id not in matched_vehicles and not vehicle_data.get('predicted', False):
+                 continue # Skip checks against tracks that weren't updated this frame unless predicted
+
             veh_center = calculate_center(vehicle_data['box'])
             distance = calculate_distance(det_center, veh_center)
-            frames_since_seen = processed_frames - vehicle_data['last_seen']
+            frames_since_seen = processed_frames - vehicle_data['last_seen'] # Note: last_seen might be old if predicted
 
             # Use proximity thresholds from config
-            if distance < PROXIMITY_THRESHOLDS['distance_close'] and frames_since_seen < COOLDOWN_FRAMES:
-                too_close_to_existing = True
-                break
+            # Check against recently seen/updated tracks
+            if vehicle_id in matched_vehicles and distance < PROXIMITY_THRESHOLDS['distance_close'] and frames_since_seen < COOLDOWN_FRAMES:
+                 too_close_to_existing = True
+                 # logger.debug(f"New track too close (distance) to recently matched {vehicle_id}")
+                 break
 
-            if frames_since_seen >= DISAPPEAR_THRESHOLD and distance < PROXIMITY_THRESHOLDS['distance_disappeared']:
-                too_close_to_existing = True
-                break
+            # Check against disappeared tracks (more lenient distance)
+            if vehicle_id not in matched_vehicles and vehicle_data.get('predicted', False) and distance < PROXIMITY_THRESHOLDS['distance_disappeared']:
+                 too_close_to_existing = True
+                 # logger.debug(f"New track too close (distance) to predicted {vehicle_id}")
+                 break
 
+            # Check overlap against recently seen/updated tracks
             overlap = calculate_overlap_area(vehicle_data['box'], detection['box'])
-            if overlap > PROXIMITY_THRESHOLDS['overlap_close'] and frames_since_seen < PROXIMITY_THRESHOLDS['frames_close']:
-                too_close_to_existing = True
-                break
-                
+            if vehicle_id in matched_vehicles and overlap > PROXIMITY_THRESHOLDS['overlap_close'] and frames_since_seen < PROXIMITY_THRESHOLDS['frames_close']:
+                 too_close_to_existing = True
+                 # logger.debug(f"New track too close (overlap) to recently matched {vehicle_id}")
+                 break
+
         if not too_close_to_existing:
-            logger.debug(f"Creating new track {next_vehicle_id} at frame {processed_frames}")
+            logger.debug(f"Creating new track {next_vehicle_id} at frame {processed_frames} (Class: {detection['class_id']}, Conf: {detection['confidence']:.2f})")
             tracked_vehicles[next_vehicle_id] = {
                 'box': detection['box'],
                 'class_id': detection['class_id'],
@@ -273,69 +318,100 @@ def process_detections(
                 'predicted': False,
                 'detection_stability': 1
             }
+            # Add to matched_vehicles set to prevent it being immediately considered for removal/prediction in this same frame
             matched_vehicles.add(next_vehicle_id)
             next_vehicle_id += 1
-    
+        # else: # Optional logging
+            # logger.debug(f"Skipping new track creation for detection (Class: {detection['class_id']}, Conf: {detection['confidence']:.2f}) due to proximity.")
+
+
+    # --- Update state for vehicles NOT matched in this frame ---
+    vehicles_to_remove = []
     for vehicle_id, vehicle_data in tracked_vehicles.items():
-        if vehicle_id not in matched_vehicles and 'velocity' in vehicle_data:
+        if vehicle_id not in matched_vehicles:
             frames_since_seen = processed_frames - vehicle_data['last_seen']
-            
-            if frames_since_seen < MAX_PREDICTION_FRAMES:
+
+            # Predict position if recently lost
+            if frames_since_seen < MAX_PREDICTION_FRAMES and 'velocity' in vehicle_data:
                 old_box = vehicle_data['box']
                 old_center = calculate_center(old_box)
-                
+
+                # Predict based on last known velocity
                 new_center_x = old_center[0] + vehicle_data['velocity'][0]
                 new_center_y = old_center[1] + vehicle_data['velocity'][1]
-                
-                dx = new_center_x - old_center[0]
-                dy = new_center_y - old_center[1]
-                
+
+                # Keep box size the same during prediction
+                width = old_box[2] - old_box[0]
+                height = old_box[3] - old_box[1]
+
                 new_box = [
-                    old_box[0] + dx,
-                    old_box[1] + dy,
-                    old_box[2] + dx,
-                    old_box[3] + dy
+                    new_center_x - width / 2,
+                    new_center_y - height / 2,
+                    new_center_x + width / 2,
+                    new_center_y + height / 2
                 ]
-                
+
+                # Basic boundary check (optional, adjust as needed)
+                new_box[0] = max(0, new_box[0])
+                new_box[1] = max(0, new_box[1])
+                new_box[2] = min(frame_width, new_box[2])
+                new_box[3] = min(frame_height, new_box[3])
+
                 vehicle_data['box'] = new_box
                 vehicle_data['predicted'] = True
-                
+                vehicle_data['consecutive_matches'] = 0 # Reset consecutive matches on prediction
+                # Decay stability when not detected
                 if 'detection_stability' in vehicle_data:
-                    vehicle_data['detection_stability'] = max(0, vehicle_data['detection_stability'] - 0.5)
+                    vehicle_data['detection_stability'] = max(0, vehicle_data['detection_stability'] - 0.5) # Decay faster?
 
+            # Mark for removal if lost for too long
+            elif frames_since_seen > DISAPPEAR_THRESHOLD:
+                vehicles_to_remove.append(vehicle_id)
+            else:
+                 # Vehicle is lost but not yet disappeared or predicted (e.g., velocity not established)
+                 vehicle_data['predicted'] = False # Ensure predicted flag is false
+                 vehicle_data['consecutive_matches'] = 0
+                 if 'detection_stability' in vehicle_data:
+                     vehicle_data['detection_stability'] = max(0, vehicle_data['detection_stability'] - 0.1) # Slow decay
+
+    # --- Counting Logic ---
     # Use configured vehicle classes for counting check
     vehicle_classes_for_counting = set(CONFIG['model']['vehicle_classes'])
 
     for vehicle_id, vehicle_data in tracked_vehicles.items():
-        consecutive_matches = vehicle_data.get('consecutive_matches', 0)
-        stability = vehicle_data.get('detection_stability', 0)
-        is_counted = vehicle_data.get('is_counted', False)
-        current_class_id = vehicle_data.get('class_id') # Get the current determined class ID
+         # Check if vehicle exists after potential removal list generation
+         if vehicle_id in vehicles_to_remove:
+             continue
 
-        # Check if the vehicle's class is one we should count
-        # Use counting stability threshold from config
-        if not is_counted and current_class_id in vehicle_classes_for_counting and \
-           consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= COUNTING_STABILITY_THRESHOLD:
+         consecutive_matches = vehicle_data.get('consecutive_matches', 0)
+         stability = vehicle_data.get('detection_stability', 0)
+         is_counted = vehicle_data.get('is_counted', False)
+         current_class_id = vehicle_data.get('class_id') # Get the current determined class ID
+         is_predicted = vehicle_data.get('predicted', False) # Don't count predicted states
 
-            vehicle_data['is_counted'] = True
-            # Increment the master count (using a consistent key, e.g., the first vehicle class ID or a generic key)
-            # Let's use the first vehicle class ID from config as the key in unique_vehicle_counts
-            # Or better, let save_vehicle_counts_to_json handle the aggregation.
-            # We just need to ensure this vehicle is marked counted.
-            # The actual aggregation happens in save_vehicle_counts_to_json based on all values in unique_vehicle_counts.
-            # Let's increment the count for the specific class detected.
-            if current_class_id not in unique_vehicle_counts:
-                 unique_vehicle_counts[current_class_id] = 0
-            unique_vehicle_counts[current_class_id] += 1
-            logger.info(f"Counted vehicle ID {vehicle_id} (Class: {current_class_id}, Stable). Total for class {current_class_id}: {unique_vehicle_counts[current_class_id]}")
+         # Check if the vehicle's class is one we should count
+         # Use counting stability threshold from config
+         if not is_counted and not is_predicted and current_class_id in vehicle_classes_for_counting and \
+            consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= COUNTING_STABILITY_THRESHOLD:
 
-    vehicles_to_remove = []
-    for vehicle_id, vehicle_data in tracked_vehicles.items():
-        if processed_frames - vehicle_data['last_seen'] > DISAPPEAR_THRESHOLD:
-            vehicles_to_remove.append(vehicle_id)
-    
+             # Additional check: Ensure the vehicle center is within the ROI if enabled
+             should_count = True
+             if CONFIG['roi']['enabled']:
+                 if not is_in_roi(vehicle_data['box'], frame_width, frame_height):
+                     should_count = False
+                     # logger.debug(f"Vehicle {vehicle_id} met stability but is outside ROI, not counting yet.")
+
+             if should_count:
+                 vehicle_data['is_counted'] = True
+                 # Increment the count for the specific class detected.
+                 if current_class_id not in unique_vehicle_counts:
+                     unique_vehicle_counts[current_class_id] = 0
+                 unique_vehicle_counts[current_class_id] += 1
+                 logger.info(f"Counted vehicle ID {vehicle_id} (Class: {current_class_id}, Stable). Total for class {current_class_id}: {unique_vehicle_counts[current_class_id]}")
+
+    # --- Remove disappeared tracks ---
     for vehicle_id in vehicles_to_remove:
         logger.debug(f"Removing disappeared track {vehicle_id} at frame {processed_frames}")
-        tracked_vehicles.pop(vehicle_id)
-    
+        tracked_vehicles.pop(vehicle_id, None) # Use pop with default None
+
     return tracked_vehicles, unique_vehicle_counts
