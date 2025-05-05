@@ -230,21 +230,45 @@ def annotate_frame(
     count_display_color = green_color # Use darker green for count text
     title_text = "Conteo"
     title_size, _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], 2)
-    title_x = frame_width - title_size[0] - 10
+    title_x = frame_width - title_size[0] - 10 # Align title to the right
     y_pos = 40
 
     cv2.putText(annotated_frame, title_text, (title_x, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_title_scale'], count_display_color, 2)
     y_pos += 30
 
-    # Use the spanish name from config
-    spanish_name = CONFIG['model']['spanish_names'].get("vehicle", "vehiculo")
-    total_vehicles = sum(unique_vehicle_counts.values()) # Sum all counted vehicles
-    text = f"{spanish_name.capitalize()}: {total_vehicles}"
-    text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], 2)
-    text_x = frame_width - text_size[0] - 10
+    # --- Remove display counts per class --- 
+    # class_names = CONFIG['model']['class_names']
+    # spanish_names = CONFIG['model']['spanish_names']
+    # text_scale = CONFIG['annotation']['count_display_text_scale']
+    # text_thickness = 2
 
-    # Ensure the putText call is correctly formatted on a single line
-    cv2.putText(annotated_frame, text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, CONFIG['annotation']['count_display_text_scale'], count_display_color, 2)
+    # # Sort class IDs for consistent display order (optional)
+    # sorted_class_ids = sorted(unique_vehicle_counts.keys())
+
+    # for class_id in sorted_class_ids:
+    #     count = unique_vehicle_counts[class_id]
+    #     # Get English name, then Spanish name
+    #     english_name = class_names.get(class_id, f"Clase {class_id}")
+    #     display_name = spanish_names.get(english_name, english_name).capitalize()
+    #     text = f"{display_name}: {count}"
+    #     text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_thickness)
+    #     text_x = frame_width - text_size[0] - 10 # Align text to the right
+    #     cv2.putText(annotated_frame, text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, text_scale, count_display_color, text_thickness)
+    #     y_pos += 20 # Increment y position for the next line
+    # --- End removal --- 
+
+    # --- Display Total Count --- 
+    # y_pos += 10 # Adjust position if per-class counts are removed
+    spanish_names = CONFIG['model']['spanish_names'] # Define spanish_names here
+    text_scale = CONFIG['annotation']['count_display_text_scale'] # Ensure text_scale is defined
+    text_thickness = 2 # Ensure text_thickness is defined
+    total_spanish_name = spanish_names.get("vehicle_total", "Total").capitalize()
+    total_vehicles = sum(unique_vehicle_counts.values()) # Sum all counted vehicles
+    text = f"{total_spanish_name}: {total_vehicles}"
+    text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_thickness)
+    text_x = frame_width - text_size[0] - 10 # Align text to the right
+    cv2.putText(annotated_frame, text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, text_scale, count_display_color, text_thickness)
+    # --- End Total Count --- 
 
     return annotated_frame

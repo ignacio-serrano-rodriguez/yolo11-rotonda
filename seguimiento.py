@@ -28,6 +28,7 @@ VELOCITY_ALPHA = PARAMS['velocity_alpha']
 PREDICTION_MATCH_THRESHOLD = PARAMS['prediction_match_threshold']
 PROXIMITY_THRESHOLDS = PARAMS['proximity_thresholds']
 COUNTING_STABILITY_THRESHOLD = PARAMS['counting_stability_threshold']
+MIN_CONSECUTIVE_ROI_FRAMES = PARAMS.get('min_consecutive_roi_frames', 1) # Load new param, default to 1
 
 # Load model confidence settings
 MODEL_CONFIG = CONFIG['model']
@@ -120,7 +121,9 @@ def calculate_match_score(
 def update_tracked_vehicle(
     vehicle_data: Dict[str, Any],
     detection: Dict[str, Any],
-    processed_frames: int
+    processed_frames: int,
+    frame_width: int, # Add frame dimensions
+    frame_height: int # Add frame dimensions
 ) -> Dict[str, Any]:
     """Updates the state of a tracked vehicle with a new matching detection."""
     old_center = calculate_center(vehicle_data['box'])
@@ -142,14 +145,33 @@ def update_tracked_vehicle(
         vehicle_data['class_history'] = deque(maxlen=CLASS_HISTORY_SIZE)
     vehicle_data['class_history'].append(detection['class_id'])
     
-    vehicle_data['class_id'] = get_most_common_class(vehicle_data['class_history'])
+    # --- Classification Lock Logic ---
+    # Check if the initial class was a car or truck (defined in config)
+    initial_class_id = vehicle_data.get('initial_class_id')
+    vehicle_classes_to_lock = set(CONFIG['model']['vehicle_classes'])
+
+    if initial_class_id is not None and initial_class_id in vehicle_classes_to_lock:
+        # If the initial class was a car/truck, keep it locked
+        vehicle_data['class_id'] = initial_class_id
+    else:
+        # Otherwise, update based on the most common class in history
+        vehicle_data['class_id'] = get_most_common_class(vehicle_data['class_history'])
+    # --- End Classification Lock Logic ---
+
     vehicle_data['box'] = detection['box']
     vehicle_data['last_seen'] = processed_frames
     vehicle_data['confidence'] = detection['confidence']
     vehicle_data['consecutive_matches'] = vehicle_data.get('consecutive_matches', 0) + 1
     vehicle_data['predicted'] = False
     vehicle_data['detection_stability'] = vehicle_data.get('detection_stability', 0) + 1
-    
+
+    # --- Update Consecutive ROI Frames --- 
+    if is_in_roi(detection['box'], frame_width, frame_height):
+        vehicle_data['consecutive_roi_frames'] = vehicle_data.get('consecutive_roi_frames', 0) + 1
+    else:
+        vehicle_data['consecutive_roi_frames'] = 0 # Reset if outside ROI
+    # --- End Update --- 
+
     return vehicle_data
 
 def match_with_predicted_positions(
@@ -288,7 +310,7 @@ def process_detections(
                     # Do not add best_match to matched_vehicles
                 else:
                     # Normal update
-                    tracked_vehicles[best_match] = update_tracked_vehicle(vehicle_data, detection, processed_frames)
+                    tracked_vehicles[best_match] = update_tracked_vehicle(vehicle_data, detection, processed_frames, frame_width, frame_height)
                     matched_vehicles.add(best_match)
             else:
                  # This detection matched strongly with a vehicle that was already matched by another detection.
@@ -342,9 +364,14 @@ def process_detections(
 
         if not too_close_to_existing:
             logger.debug(f"Creating new track {next_vehicle_id} at frame {processed_frames} (Class: {detection['class_id']}, Conf: {detection['confidence']:.2f})")
+            # --- Initialize Consecutive ROI Frames --- 
+            initial_in_roi = is_in_roi(detection['box'], frame_width, frame_height)
+            initial_roi_frames = 1 if initial_in_roi else 0
+            # --- End Initialization --- 
             tracked_vehicles[next_vehicle_id] = {
                 'box': detection['box'],
                 'class_id': detection['class_id'],
+                'initial_class_id': detection['class_id'], # Store the initial class ID
                 'class_history': deque([detection['class_id']], maxlen=CLASS_HISTORY_SIZE),
                 'last_seen': processed_frames,
                 'confidence': detection['confidence'],
@@ -352,7 +379,8 @@ def process_detections(
                 'consecutive_matches': 1,
                 'is_counted': False,
                 'predicted': False,
-                'detection_stability': 1
+                'detection_stability': 1,
+                'consecutive_roi_frames': initial_roi_frames # Add the new field
             }
             # Add to matched_vehicles set to prevent it being immediately considered for removal/prediction in this same frame
             matched_vehicles.add(next_vehicle_id)
@@ -424,13 +452,17 @@ def process_detections(
          is_counted = vehicle_data.get('is_counted', False)
          current_class_id = vehicle_data.get('class_id') # Get the current determined class ID
          is_predicted = vehicle_data.get('predicted', False) # Don't count predicted states
+         consecutive_roi = vehicle_data.get('consecutive_roi_frames', 0) # Get consecutive ROI frames
 
          # Check if the vehicle's class is one we should count
          # Use counting stability threshold from config
+         # --- Add check for consecutive ROI frames --- 
          if not is_counted and not is_predicted and current_class_id in vehicle_classes_for_counting and \
-            consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= COUNTING_STABILITY_THRESHOLD:
+            consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= COUNTING_STABILITY_THRESHOLD and \
+            consecutive_roi >= MIN_CONSECUTIVE_ROI_FRAMES: # New condition
+         # --- End check --- 
 
-             # Additional check: Ensure the vehicle center is within the ROI if enabled
+             # Additional check: Ensure the vehicle center is within the ROI if enabled (redundant now? Keep for safety)
              should_count = True
              if CONFIG['roi']['enabled']:
                  # Use pre-calculated ROI boundaries
@@ -445,7 +477,7 @@ def process_detections(
                  if current_class_id not in unique_vehicle_counts:
                      unique_vehicle_counts[current_class_id] = 0
                  unique_vehicle_counts[current_class_id] += 1
-                 logger.info(f"Counted vehicle ID {vehicle_id} (Class: {current_class_id}, Stable). Total for class {current_class_id}: {unique_vehicle_counts[current_class_id]}")
+                 logger.info(f"Counted vehicle ID {vehicle_id} (Class: {current_class_id}, Stable, ROI Frames: {consecutive_roi}). Total for class {current_class_id}: {unique_vehicle_counts[current_class_id]}")
 
     # --- Remove disappeared tracks ---
     for vehicle_id in vehicles_to_remove:
