@@ -29,6 +29,8 @@ PREDICTION_MATCH_THRESHOLD = PARAMS['prediction_match_threshold']
 PROXIMITY_THRESHOLDS = PARAMS['proximity_thresholds']
 COUNTING_STABILITY_THRESHOLD = PARAMS['counting_stability_threshold']
 MIN_CONSECUTIVE_ROI_FRAMES = PARAMS.get('min_consecutive_roi_frames', 1) # Load new param, default to 1
+# Read the new parameter
+CLASS_CONFIRMATION_FRAMES = PARAMS.get('class_confirmation_frames', 3) # Default to 3 if not in config
 
 # Load model confidence settings
 MODEL_CONFIG = CONFIG['model']
@@ -144,20 +146,47 @@ def update_tracked_vehicle(
     if 'class_history' not in vehicle_data:
         vehicle_data['class_history'] = deque(maxlen=CLASS_HISTORY_SIZE)
     vehicle_data['class_history'].append(detection['class_id'])
-    
-    # --- Classification Lock Logic ---
-    # Check if the initial class was a car or truck (defined in config)
-    initial_class_id = vehicle_data.get('initial_class_id')
-    # Explicitly define classes to lock (e.g., car and truck)
-    vehicle_classes_to_lock = {2, 7, 3} # Lock only car (2), truck (7), and motorcycle (3)
 
-    if initial_class_id is not None and initial_class_id in vehicle_classes_to_lock:
-        # If the initial class was a car/truck, keep it locked
-        vehicle_data['class_id'] = initial_class_id
+    # Determine the majority class from history *before* applying locks
+    current_majority_class = get_most_common_class(vehicle_data['class_history'])
+
+    # --- Class Confirmation Logic ---
+    previous_majority_class = vehicle_data.get('previous_majority_class', None)
+    consecutive_class_frames = vehicle_data.get('consecutive_class_frames', 0)
+
+    if current_majority_class == previous_majority_class:
+        consecutive_class_frames += 1
     else:
-        # Otherwise, update based on the most common class in history
-        vehicle_data['class_id'] = get_most_common_class(vehicle_data['class_history'])
-    # --- End Classification Lock Logic ---
+        # Reset confirmation if majority class changes
+        consecutive_class_frames = 1
+        vehicle_data['confirmed_class_id'] = None # Reset confirmed class
+
+    vehicle_data['previous_majority_class'] = current_majority_class
+    vehicle_data['consecutive_class_frames'] = consecutive_class_frames
+
+    # Confirm the class if it has been stable long enough
+    if vehicle_data['confirmed_class_id'] is None and consecutive_class_frames >= CLASS_CONFIRMATION_FRAMES:
+        vehicle_data['confirmed_class_id'] = current_majority_class
+        logger.debug(f"Confirmed class for vehicle {vehicle_data['id']} as {current_majority_class} after {consecutive_class_frames} frames.")
+    # --- End Class Confirmation Logic ---
+
+
+    # --- Update Main Class ID (Respecting Confirmation and Count Lock) ---
+    if not vehicle_data.get('is_counted', False):
+        confirmed_class = vehicle_data.get('confirmed_class_id')
+        initial_class_id = vehicle_data.get('initial_class_id')
+        vehicle_classes_to_lock = {2, 7, 3} # Lock car, truck, motorcycle
+
+        if confirmed_class is not None:
+             # Prioritize confirmed class if available
+             vehicle_data['class_id'] = confirmed_class
+        elif initial_class_id is not None and initial_class_id in vehicle_classes_to_lock:
+            # Fallback to initial lock for specific classes if not yet confirmed
+            vehicle_data['class_id'] = initial_class_id
+        else:
+            # Fallback to current majority if no confirmation or initial lock applies
+            vehicle_data['class_id'] = current_majority_class
+    # --- End Update Main Class ID ---
 
     vehicle_data['box'] = detection['box']
     vehicle_data['last_seen'] = processed_frames
@@ -332,48 +361,60 @@ def process_detections(
         # We just need to check proximity before creating a new track.
         det_center = calculate_center(detection['box'])
         too_close_to_existing = False
+        detection_class = detection['class_id'] # Get detection class once
 
         for vehicle_id, vehicle_data in tracked_vehicles.items():
             # Check proximity only against vehicles that were *actually seen* recently or are predicted
-            # Avoid checking against very old disappeared tracks unless specifically needed
             if vehicle_id not in matched_vehicles and not vehicle_data.get('predicted', False):
-                 continue # Skip checks against tracks that weren't updated this frame unless predicted
+                 continue
 
             veh_center = calculate_center(vehicle_data['box'])
             distance = calculate_distance(det_center, veh_center)
-            frames_since_seen = processed_frames - vehicle_data['last_seen'] # Note: last_seen might be old if predicted
-
-            # Use proximity thresholds from config
-            # Check against recently seen/updated tracks
-            if vehicle_id in matched_vehicles and distance < PROXIMITY_THRESHOLDS['distance_close'] and frames_since_seen < COOLDOWN_FRAMES:
-                 too_close_to_existing = True
-                 # logger.debug(f"New track too close (distance) to recently matched {vehicle_id}")
-                 break
-
-            # Check against disappeared tracks (more lenient distance)
-            if vehicle_id not in matched_vehicles and vehicle_data.get('predicted', False) and distance < PROXIMITY_THRESHOLDS['distance_disappeared']:
-                 too_close_to_existing = True
-                 # logger.debug(f"New track too close (distance) to predicted {vehicle_id}")
-                 break
-
-            # Check overlap against recently seen/updated tracks
+            frames_since_seen = processed_frames - vehicle_data['last_seen']
             overlap = calculate_overlap_area(vehicle_data['box'], detection['box'])
+            track_class = vehicle_data.get('class_id') # Get track class
+
+            # Define conditions for being too close
+            close_by_distance = False
+            close_by_overlap = False
+
+            # Check distance thresholds
+            if vehicle_id in matched_vehicles and distance < PROXIMITY_THRESHOLDS['distance_close'] and frames_since_seen < COOLDOWN_FRAMES:
+                close_by_distance = True
+            elif vehicle_id not in matched_vehicles and vehicle_data.get('predicted', False) and distance < PROXIMITY_THRESHOLDS['distance_disappeared']:
+                close_by_distance = True
+
+            # Check overlap threshold
             if vehicle_id in matched_vehicles and overlap > PROXIMITY_THRESHOLDS['overlap_close'] and frames_since_seen < PROXIMITY_THRESHOLDS['frames_close']:
-                 too_close_to_existing = True
-                 # logger.debug(f"New track too close (overlap) to recently matched {vehicle_id}")
-                 break
+                close_by_overlap = True
+
+            # Check if thresholds are met
+            if close_by_distance or close_by_overlap:
+                # --- Add Class Check --- 
+                problem_classes = {2, 7} # Car and Truck
+                # If one is car and the other is truck, DO NOT consider them too close based on proximity alone
+                if detection_class in problem_classes and track_class in problem_classes and detection_class != track_class:
+                    # logger.debug(f"Skipping proximity merge for detection (Class: {detection_class}) near track {vehicle_id} (Class: {track_class}) due to class difference.")
+                    continue # Skip setting too_close_to_existing = True for this specific track
+                # --- End Class Check ---
+                
+                # Otherwise (same class, or other classes involved), they are too close
+                too_close_to_existing = True
+                # logger.debug(f"New track too close (Dist: {distance:.1f}, Overlap: {overlap:.2f}) to track {vehicle_id}. Type: {'matched' if vehicle_id in matched_vehicles else 'predicted'}")
+                break # Exit the inner loop, no need to check other tracks
 
         if not too_close_to_existing:
             logger.debug(f"Creating new track {next_vehicle_id} at frame {processed_frames} (Class: {detection['class_id']}, Conf: {detection['confidence']:.2f})")
-            # --- Initialize Consecutive ROI Frames --- 
             initial_in_roi = is_in_roi(detection['box'], frame_width, frame_height)
             initial_roi_frames = 1 if initial_in_roi else 0
-            # --- End Initialization --- 
+            initial_class_id = detection['class_id']
+
             tracked_vehicles[next_vehicle_id] = {
+                'id': next_vehicle_id,
                 'box': detection['box'],
-                'class_id': detection['class_id'],
-                'initial_class_id': detection['class_id'], # Store the initial class ID
-                'class_history': deque([detection['class_id']], maxlen=CLASS_HISTORY_SIZE),
+                'class_id': initial_class_id, # Initial class based on first detection
+                'initial_class_id': initial_class_id,
+                'class_history': deque([initial_class_id], maxlen=CLASS_HISTORY_SIZE),
                 'last_seen': processed_frames,
                 'confidence': detection['confidence'],
                 'velocity': (0, 0),
@@ -381,9 +422,11 @@ def process_detections(
                 'is_counted': False,
                 'predicted': False,
                 'detection_stability': 1,
-                'consecutive_roi_frames': initial_roi_frames # Add the new field
+                'consecutive_roi_frames': initial_roi_frames,
+                'confirmed_class_id': None, # Initialize confirmed class as None
+                'consecutive_class_frames': 1, # Initialize consecutive frames
+                'previous_majority_class': initial_class_id # Initialize previous majority
             }
-            # Add to matched_vehicles set to prevent it being immediately considered for removal/prediction in this same frame
             matched_vehicles.add(next_vehicle_id)
             next_vehicle_id += 1
         # else: # Optional logging
@@ -451,19 +494,22 @@ def process_detections(
          consecutive_matches = vehicle_data.get('consecutive_matches', 0)
          stability = vehicle_data.get('detection_stability', 0)
          is_counted = vehicle_data.get('is_counted', False)
-         current_class_id = vehicle_data.get('class_id') # Get the current determined class ID
+         # current_class_id = vehicle_data.get('class_id') # No longer primary for counting check
+         confirmed_class_id = vehicle_data.get('confirmed_class_id') # Get the confirmed class
          is_predicted = vehicle_data.get('predicted', False) # Don't count predicted states
          consecutive_roi = vehicle_data.get('consecutive_roi_frames', 0) # Get consecutive ROI frames
 
-         # Check if the vehicle's class is one we should count
-         # Use counting stability threshold from config
-         # --- Add check for consecutive ROI frames --- 
-         if not is_counted and not is_predicted and current_class_id in vehicle_classes_for_counting and \
-            consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and stability >= COUNTING_STABILITY_THRESHOLD and \
-            consecutive_roi >= MIN_CONSECUTIVE_ROI_FRAMES: # New condition
-         # --- End check --- 
+         # --- Updated Counting Condition ---
+         # Count only if: not already counted, not predicted, class is confirmed,
+         # meets stability/match thresholds, and has been in ROI long enough.
+         if not is_counted and not is_predicted and confirmed_class_id is not None and \
+            confirmed_class_id in vehicle_classes_for_counting and \
+            consecutive_matches >= MIN_CONSECUTIVE_DETECTIONS and \
+            stability >= COUNTING_STABILITY_THRESHOLD and \
+            consecutive_roi >= MIN_CONSECUTIVE_ROI_FRAMES:
+         # --- End Updated Counting Condition ---
 
-             # Additional check: Ensure the vehicle center is within the ROI if enabled (redundant now? Keep for safety)
+             # Additional check: Ensure the vehicle center is within the ROI if enabled
              should_count = True
              if CONFIG['roi']['enabled']:
                  # Use pre-calculated ROI boundaries
@@ -474,11 +520,12 @@ def process_detections(
 
              if should_count:
                  vehicle_data['is_counted'] = True
-                 # Increment the count for the specific class detected.
-                 if current_class_id not in unique_vehicle_counts:
-                     unique_vehicle_counts[current_class_id] = 0
-                 unique_vehicle_counts[current_class_id] += 1
-                 logger.info(f"Counted vehicle ID {vehicle_id} (Class: {current_class_id}, Stable, ROI Frames: {consecutive_roi}). Total for class {current_class_id}: {unique_vehicle_counts[current_class_id]}")
+                 # Use the confirmed_class_id for counting
+                 count_class = confirmed_class_id
+                 if count_class not in unique_vehicle_counts:
+                     unique_vehicle_counts[count_class] = 0
+                 unique_vehicle_counts[count_class] += 1
+                 logger.info(f"Counted vehicle ID {vehicle_id} (Confirmed Class: {count_class}, Stable, ROI Frames: {consecutive_roi}). Total for class {count_class}: {unique_vehicle_counts[count_class]}")
 
     # --- Remove disappeared tracks ---
     for vehicle_id in vehicles_to_remove:

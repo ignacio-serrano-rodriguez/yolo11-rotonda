@@ -125,47 +125,52 @@ def get_most_common_class(class_history: Deque[int]) -> int:
     return max(class_counts, key=class_counts.get)
 
 def is_in_roi(box: List[float], frame_width: int, frame_height: int) -> bool:
-    """Checks if the center of a bounding box is within the defined ROI."""
+    """Checks if the center of a bounding box is strictly within the defined ROI."""
     roi_config = CONFIG['roi']
     if not roi_config['enabled']:
-        return True
+        return True # If ROI is disabled, everything is considered inside
 
     roi_coords = roi_config['coords']
-    roi_pixels = [
-        int(roi_coords[0] * frame_width),
-        int(roi_coords[1] * frame_height),
-        int(roi_coords[2] * frame_width),
-        int(roi_coords[3] * frame_height)
-    ]
+    # Calculate ROI boundaries in pixels
+    roi_x1 = int(roi_coords[0] * frame_width)
+    roi_y1 = int(roi_coords[1] * frame_height)
+    roi_x2 = int(roi_coords[2] * frame_width)
+    roi_y2 = int(roi_coords[3] * frame_height)
     
+    # Calculate the center of the bounding box
     center_x = (box[0] + box[2]) / 2
     center_y = (box[1] + box[3]) / 2
     
-    intersection_x1 = max(box[0], roi_pixels[0])
-    intersection_y1 = max(box[1], roi_pixels[1])
-    intersection_x2 = min(box[2], roi_pixels[2])
-    intersection_y2 = min(box[3], roi_pixels[3])
+    # --- Strict Check: Center point must be inside ROI boundaries --- 
+    is_inside = (roi_x1 <= center_x <= roi_x2 and 
+                 roi_y1 <= center_y <= roi_y2)
+    # --- End Strict Check --- 
     
-    if intersection_x1 < intersection_x2 and intersection_y1 < intersection_y2:
-        intersection_area = (intersection_x2 - intersection_x1) * (intersection_y2 - intersection_y1)
-        box_area = (box[2] - box[0]) * (box[3] - box[1])
-        
-        if intersection_area / box_area > 0.3: # Threshold for partial overlap
-            return True
-    
-    return (roi_pixels[0] <= center_x <= roi_pixels[2] and 
-            roi_pixels[1] <= center_y <= roi_pixels[3])
+    # --- Removed overlap check to prevent flickering at the edges ---
+    # intersection_x1 = max(box[0], roi_pixels[0])
+    # intersection_y1 = max(box[1], roi_pixels[1])
+    # intersection_x2 = min(box[2], roi_pixels[2])
+    # intersection_y2 = min(box[3], roi_pixels[3])
+    # 
+    # if intersection_x1 < intersection_x2 and intersection_y1 < intersection_y2:
+    #     intersection_area = (intersection_x2 - intersection_x1) * (intersection_y2 - intersection_y1)
+    #     box_area = (box[2] - box[0]) * (box[3] - box[1])
+    #     
+    #     # Check if overlap is significant (e.g., > 30%)
+    #     if box_area > 0 and (intersection_area / box_area > 0.3): 
+    #         return True # Consider it inside if significant overlap
+    # --- End Removed overlap check ---
+
+    return is_inside
 
 def save_vehicle_counts_to_json(counts: Dict[int, int]):
-    """Saves the total vehicle count to a JSON file, updating the existing count.
-
-    Only saves the total number of vehicles detected across all classes.
-    """
+    """Saves only the total vehicle count to a JSON file, updating existing count."""
     output_file = CONFIG['output']['count_file']
-    # Use the configured key for the total count, default to "total_vehiculos"
-    total_key = CONFIG['model']['spanish_names'].get("vehicle_total", "total_vehiculos")
+    spanish_names = CONFIG['model']['spanish_names']
+    # Define the key for the total count
+    total_key = spanish_names.get("vehicle_total", "total_vehiculos").capitalize()
 
-    # Calculate total vehicles detected in this session
+    # Calculate total count for this session
     total_current_session = sum(counts.values())
 
     # Load existing data if file exists
@@ -175,31 +180,32 @@ def save_vehicle_counts_to_json(counts: Dict[int, int]):
             with open(output_file, 'r', encoding='utf-8') as f:
                 existing_data = json.load(f)
             if not isinstance(existing_data, dict):
-                logger.warning(f"Existing data in {output_file} is not a dictionary. Overwriting with total count.")
+                logger.warning(f"Existing data in {output_file} is not a dictionary. Overwriting.")
                 existing_data = {}
             logger.info(f"Loaded existing counts from: {output_file}")
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Error reading or parsing existing count file {output_file}. Starting fresh. Error: {e}")
             existing_data = {} # Reset if file is corrupted
 
-    # Get the previous total count, default to 0 if key doesn't exist or data is invalid
+    # Get previous total count, default to 0
     previous_total = existing_data.get(total_key, 0)
-    if not isinstance(previous_total, int):
-        logger.warning(f"Existing value for '{total_key}' in {output_file} is not an integer. Resetting total.")
-        previous_total = 0
+    if not isinstance(previous_total, int): previous_total = 0 # Validate type
 
-    # Calculate the new total count
+    # Calculate new total
     new_total = previous_total + total_current_session
 
     # Prepare data to save (only the total count)
-    data_to_save = {total_key: new_total}
+    data_to_save = {
+        total_key: new_total
+    }
 
-    logger.info(f"Total vehicles this session: {total_current_session}. New total count to save: {new_total}")
+    logger.info(f"Counts this session - Total: {total_current_session}")
+    logger.info(f"New cumulative total count to save: {data_to_save}")
 
     # Save the updated data
     try:
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, indent=4, ensure_ascii=False) # ensure_ascii=False for Spanish names
+            json.dump(data_to_save, f, indent=4, ensure_ascii=False)
         logger.info(f"Total vehicle count updated successfully in {output_file}")
     except IOError as e:
         logger.error(f"Error writing to count file {output_file}. Error: {e}")

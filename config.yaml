@@ -1,7 +1,7 @@
 # config.yaml
 video:
   input_resolution: 480
-  frame_skip: 2
+  frame_skip: 1 # Reduced from 2 to 1 (process more frames)
   # confidence: 0.55 # Removed global confidence
   youtube_url: "https://www.youtube.com/watch?v=0dKNLFFcHFU"
   duration: 30 # seconds
@@ -32,7 +32,7 @@ model:
 tracking:
   iou_threshold: 0.15
   overlap_threshold: 0.4
-  disappear_threshold: 40
+  disappear_threshold: 50 # Increased from 40 to 50 (allow longer disappearance)
   cooldown_frames: 8
   min_consecutive_detections: 1
   max_prediction_frames: 15
@@ -50,16 +50,17 @@ tracking:
     velocity_alpha: 0.7 # Smoothing factor for velocity update
     prediction_match_threshold: 0.6 # Min quality score for matching with predicted position
     proximity_thresholds:
-      distance_close: 15 # Max distance to consider 'too close' for recent tracks (Reduced from 20)
-      distance_disappeared: 15 # Max distance to consider 'too close' for disappeared tracks (Keep as is or adjust if needed)
-      overlap_close: 0.6 # Min overlap to consider 'too close' for recent tracks (Reduced from 0.7)
+      distance_close: 12 # Max distance to consider 'too close' for recent tracks (Reduced from 15)
+      distance_disappeared: 15 # Max distance to consider 'too close' for disappeared tracks (Keep as is)
+      overlap_close: 0.55 # Min overlap to consider 'too close' for recent tracks (Reduced from 0.6)
       frames_close: 5 # Max frames since seen for overlap check
     counting_stability_threshold: 2 # Min stability score required to count a vehicle
-    min_consecutive_roi_frames: 5 # Increased from 3 to 5 for more robust counting against flickering
+    min_consecutive_roi_frames: 5 # Increased from 3 to 5 (require more frames in ROI to count)
+    class_confirmation_frames: 10 # Increased from 5 to 10 (require more frames for class stability)
 
 roi:
   enabled: True
-  coords: [0.8, 0.60, 1.0, 0.85] # [x1, y1, x2, y2]
+  coords: [0.8, 0.60, 0.95, 0.85] # [x1, y1, x2, y2]
   color: [0, 255, 0] # Use list for YAML
   thickness: 2
 

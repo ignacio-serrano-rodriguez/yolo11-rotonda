@@ -183,7 +183,7 @@ def process_video(
             fps_current = processed_frames / elapsed if elapsed > 0 else 0
             remaining_frames = frame_count - processed_frames
             remaining_time = remaining_frames / fps_current if fps_current > 0 else 0
-            print(f"Procesado: {processed_frames/frame_count*100:.1f}% - Tiempo restante: {remaining_time:.1f}s - Tiempo transcurrido: {elapsed:.1f}s")
+            print(f"Procesado: {processed_frames/frame_count*100:.1f}% - Tiempo restante aproximado: {remaining_time:.1f}s - Tiempo transcurrido: {elapsed:.1f}s")
     
     cap.release()
     output_video.release()
