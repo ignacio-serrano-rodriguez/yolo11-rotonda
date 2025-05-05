@@ -68,14 +68,16 @@ def get_youtube_stream(video_url: str) -> str:
 def initialize_model(device: str) -> YOLO:
     """Initializes and loads the YOLO model onto the specified device."""
     model_path = CONFIG['model']['model_path']
-    logger.info(f"Loading model from: {model_path} onto device: {device}")
+    # Use print for the required output
+    print(f"Cargando modelo ({model_path}) en el dispositivo ({device})")
     try:
         model = YOLO(model_path)
         model.to(device)
-        logger.info("Model loaded successfully.")
+        # logger.info("Model loaded successfully.") # Removed success message
         return model
     except Exception as e:
-        logger.error(f"Failed to load model: {e}")
+        # Use logger.error for actual errors
+        logging.error(f"Failed to load model: {e}")
         raise
 
 def create_video_writer(cap: cv2.VideoCapture, target_fps: int) -> Tuple[cv2.VideoWriter, int, int, str]:
@@ -87,18 +89,17 @@ def create_video_writer(cap: cv2.VideoCapture, target_fps: int) -> Tuple[cv2.Vid
     if not os.path.exists(videos_dir):
         try:
             os.makedirs(videos_dir)
-            logger.info(f"Created output directory: {videos_dir}")
+            # logger.info(f"Created output directory: {videos_dir}") # Suppressed
         except OSError as e:
-            logger.error(f"Failed to create output directory {videos_dir}: {e}")
-            # Fallback or raise error?
-            videos_dir = "." # Fallback to current directory
+            logging.error(f"Failed to create output directory {videos_dir}: {e}")
+            videos_dir = "."
 
     current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     video_filename = os.path.join(videos_dir, f'video_{current_datetime}.avi')
 
-    # Use codec from config
     fourcc = cv2.VideoWriter_fourcc(*CONFIG['output']['video']['codec'])
-    logger.info(f"Creating video writer. Filename: {video_filename}, FPS: {target_fps}, Resolution: {frame_width}x{frame_height}, Codec: {CONFIG['output']['video']['codec']}")
+    # Use print for the required output
+    print(f"Guardando video de salida en: {video_filename}, FPS: {target_fps}, Resolution: {frame_width}x{frame_height}, Codec: {CONFIG['output']['video']['codec']}")
 
     try:
         writer = cv2.VideoWriter(
@@ -111,7 +112,7 @@ def create_video_writer(cap: cv2.VideoCapture, target_fps: int) -> Tuple[cv2.Vid
              raise IOError("VideoWriter failed to open.")
         return writer, frame_width, frame_height, video_filename
     except Exception as e:
-        logger.error(f"Failed to create VideoWriter: {e}")
+        logging.error(f"Failed to create VideoWriter: {e}")
         raise
 
 # Define a list of distinct colors (BGR format)

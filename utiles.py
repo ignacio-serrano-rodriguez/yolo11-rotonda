@@ -10,9 +10,12 @@ from typing import Dict, List, Tuple, Any, Deque, Optional, Union
 # Configure logging
 log_config = yaml.safe_load(open('config.yaml', 'r')).get('logging', {})
 log_level = log_config.get('level', 'INFO').upper()
-log_format = log_config.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set log format to only include the message, keeping the config load message
+log_format = '%(message)s'
 
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format=log_format)
+# Set default logging level higher to suppress INFO unless explicitly handled
+logging.basicConfig(level=getattr(logging, "WARNING", logging.WARNING), format=log_format)
+# Get logger instance but control output via print for specific messages
 logger = logging.getLogger(__name__)
 
 def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
@@ -23,16 +26,17 @@ def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
         # Convert class names keys to integers
         if 'model' in config and 'class_names' in config['model']:
             config['model']['class_names'] = {int(k): v for k, v in config['model']['class_names'].items()}
-        logger.info(f"Configuration loaded successfully from {config_path}")
+        print(f"Configuración cargada con exito de ({config_path})") # Changed to print
         return config
     except FileNotFoundError:
-        logger.error(f"Configuration file not found at {config_path}")
+        # Use logger.error for actual errors
+        logging.error(f"Configuration file not found at {config_path}")
         sys.exit(1)
     except yaml.YAMLError as e:
-        logger.error(f"Error parsing configuration file {config_path}: {e}")
+        logging.error(f"Error parsing configuration file {config_path}: {e}")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"An unexpected error occurred while loading config: {e}")
+        logging.error(f"An unexpected error occurred while loading config: {e}")
         sys.exit(1)
 
 # Load config globally or pass it around. Loading globally for simplicity here.

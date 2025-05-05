@@ -50,7 +50,6 @@ def process_video(
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
     
     output_video, frame_width, frame_height, video_filename = create_video_writer(cap, target_fps)
-    print(f"Guardando video de salida: {video_filename}")
     
     frame_count = int(duration * target_fps)
     # Use CONFIG for vehicle classes
@@ -62,16 +61,11 @@ def process_video(
     processed_frames = 0
     real_frame = 0
     
-    # Use CONFIG for parameters
-    print(f"Resolución del vídeo: {CONFIG['video']['input_resolution']}x{CONFIG['video']['input_resolution']}\nSalto de frame: {CONFIG['video']['frame_skip']}\nConfianza (default): {CONFIG['model']['confidence']['default']}")
-    print(f"Parámetros de tracking: IOU={CONFIG['tracking']['iou_threshold']}, Desaparición={CONFIG['tracking']['disappear_threshold']}")
-    
     current_results: Optional[Any] = None
     stream_failed = False
     reconnect_attempts = 0
     max_reconnect_attempts = 10
     
-    print("Prellenando buffer de frames...")
     while len(frame_buffer) < frame_buffer.maxlen * 0.5:
         ret, frame = cap.read()
         if not ret:
@@ -86,12 +80,10 @@ def process_video(
                 reconnect_attempts = 0
             else:
                 stream_failed = True
-                print("Error al leer frame. Usando buffer...")
         
         if stream_failed:
             if reconnect_attempts < max_reconnect_attempts:
                 try:
-                    print(f"Intento de reconexión {reconnect_attempts+1}/{max_reconnect_attempts}...")
                     cap.release()
                     time.sleep(1)
                     video_stream = get_youtube_stream(CONFIG['video']['youtube_url'])
@@ -108,24 +100,18 @@ def process_video(
                         
                         if success_reads >= 3:
                             stream_failed = False
-                            print("Reconexión exitosa.")
                         else:
                             reconnect_attempts += 1
                     else:
                         reconnect_attempts += 1
                 except Exception as e:
-                    print(f"Error al reconectar: {e}")
                     reconnect_attempts += 1
         
         if len(frame_buffer) > 0:
             current_frame: np.ndarray = frame_buffer.popleft()
         elif 'annotated_frame' in locals() and isinstance(annotated_frame, np.ndarray):
             current_frame = annotated_frame.copy()
-            cv2.putText(current_frame, "BUFFER VACÍO - FRAME DUPLICADO", 
-                        (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
-                        0.8, (0, 0, 255), 2)
         else:
-            print("No hay frames disponibles para procesar.")
             break
         
         real_frame += 1
@@ -189,17 +175,15 @@ def process_video(
         else:
             annotated_frame = current_frame.copy()
         
-        buffer_fill = len(frame_buffer) / frame_buffer.maxlen
-        buffer_color = (0, 255, 0) if buffer_fill > 0.5 else (0, 165, 255) if buffer_fill > 0.2 else (0, 0, 255)
-        
         output_video.write(annotated_frame)
         processed_frames += 1
         
-        if processed_frames % 30 == 0:
+        if processed_frames % 30 == 0 or processed_frames == frame_count: # Print every 30 frames or on the last frame
             elapsed = time.time() - start_time
-            fps_current = processed_frames / elapsed
-            remaining = (frame_count - processed_frames) / fps_current
-            print(f"- ({processed_frames/frame_count*100:.1f}%) Procesado - {processed_frames}/{frame_count} Frames procesados - {remaining:.1f}s restantes aprox")
+            fps_current = processed_frames / elapsed if elapsed > 0 else 0
+            remaining_frames = frame_count - processed_frames
+            remaining_time = remaining_frames / fps_current if fps_current > 0 else 0
+            print(f"Procesado: {processed_frames/frame_count*100:.1f}% - Tiempo restante: {remaining_time:.1f}s - Tiempo transcurrido: {elapsed:.1f}s")
     
     cap.release()
     output_video.release()
@@ -209,19 +193,14 @@ def process_video(
 def main() -> None:
     device = setup_gpu()
     
-    print("Cargando modelo YOLO...")
     model: YOLO = initialize_model(device)
     
-    print("Conexión al stream de YouTube...")
     try:
-        # Use CONFIG for YouTube URL
         video_stream: str = get_youtube_stream(CONFIG['video']['youtube_url'])
     except Exception as e:
-        print(f"Error al conectar con YouTube: {e}")
+        print(f"Error al conectar con YouTube: {e}") # Keep error message
         return
     
-    print("Procesando vídeo...")
-    # Use CONFIG for duration and target FPS
     unique_vehicle_counts: Optional[Dict[int, int]] = process_video(
         model, 
         device, 
@@ -232,7 +211,7 @@ def main() -> None:
     
     if unique_vehicle_counts:
         save_vehicle_counts_to_json(unique_vehicle_counts)
-        print("Procesamiento completado con éxito.")
+        print("Procesamiento completado con éxito.") # Keep completion message
 
 if __name__ == "__main__":
     main()
