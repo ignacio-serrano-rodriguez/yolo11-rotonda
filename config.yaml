@@ -10,18 +10,23 @@ video:
 model:
   class_names:
     2: "car"
+    3: "motorcycle" # Added motorcycle name
+    5: "bus" # Added bus name
     7: "truck"
   spanish_names:
     "car": "coche"
+    "motorcycle": "moto" # Added Spanish name for motorcycle
+    "bus": "autobús" # Added Spanish name for bus
+    "truck": "camión" # Added Spanish name for truck
     "vehicle_total": "vehiculos" # Generic name for total count
-  vehicle_classes: [2, 7, 3] # Add motorcycle (3) to enable detection
+  vehicle_classes: [2, 7, 3, 5] # Add bus (5) to enable detection
   model_path: "yolo11m.pt"
   # Define confidence thresholds: default and per-class override
   confidence:
     default: 0.01 # Default confidence for all classes
     2: 0.50 # Cars confidence
-    3: 0.25 # Motocycles confidence (Lowered from 0.01? Needs check, setting to 0.25)
-    5: 0.50 # Cars confidence
+    3: 0.10 # Motocycles confidence (Lowered from 0.25)
+    5: 0.50 # Bus confidence (Set to default car/truck level)
     7: 0.50 # Truck confidence
 
 tracking:

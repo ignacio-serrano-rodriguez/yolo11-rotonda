@@ -148,7 +148,8 @@ def update_tracked_vehicle(
     # --- Classification Lock Logic ---
     # Check if the initial class was a car or truck (defined in config)
     initial_class_id = vehicle_data.get('initial_class_id')
-    vehicle_classes_to_lock = set(CONFIG['model']['vehicle_classes'])
+    # Explicitly define classes to lock (e.g., car and truck)
+    vehicle_classes_to_lock = {2, 7} # Lock only car (2) and truck (7)
 
     if initial_class_id is not None and initial_class_id in vehicle_classes_to_lock:
         # If the initial class was a car/truck, keep it locked
