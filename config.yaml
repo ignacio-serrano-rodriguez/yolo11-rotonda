@@ -50,9 +50,9 @@ tracking:
     velocity_alpha: 0.7 # Smoothing factor for velocity update
     prediction_match_threshold: 0.6 # Min quality score for matching with predicted position
     proximity_thresholds:
-      distance_close: 20 # Max distance to consider 'too close' for recent tracks
-      distance_disappeared: 15 # Max distance to consider 'too close' for disappeared tracks
-      overlap_close: 0.7 # Min overlap to consider 'too close' for recent tracks
+      distance_close: 15 # Max distance to consider 'too close' for recent tracks (Reduced from 20)
+      distance_disappeared: 15 # Max distance to consider 'too close' for disappeared tracks (Keep as is or adjust if needed)
+      overlap_close: 0.6 # Min overlap to consider 'too close' for recent tracks (Reduced from 0.7)
       frames_close: 5 # Max frames since seen for overlap check
     counting_stability_threshold: 2 # Min stability score required to count a vehicle
     min_consecutive_roi_frames: 5 # Increased from 3 to 5 for more robust counting against flickering
