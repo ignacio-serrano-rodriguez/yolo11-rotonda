@@ -1,4 +1,5 @@
 # YOLO11-Rotonda
+[Video demonstration post](https://www.linkedin.com/feed/update/urn:li:activity:7332816047516864513)
 
 YOLO11-Rotonda is a Python-based project for real-time roundabout (rotonda) detection in traffic scenes using the YOLO (You Only Look Once) deep learning architecture. This repository provides a modular pipeline for training, evaluating, and deploying object detection models specifically tailored for roundabout identification and analysis, supporting intelligent transportation systems and autonomous driving applications.
 
